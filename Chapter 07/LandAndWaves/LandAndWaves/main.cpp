@@ -1,16 +1,21 @@
 #include "../../../Common/VulkApp.h"
-#include "../../../Common/VulkUtil.h"
-#include "../../../Common/GeometryGenerator.h"
+#include "../../Common/VulkUtil.h"
 #include "../../../Common/MathHelper.h"
 #include "../../../Common/Colors.h"
+#include "../../../Common/GeometryGenerator.h"
 #include "FrameResource.h"
-#include "Waves.h"
+
+
 #include <memory>
+
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "ShaderProgram.h"
+
+#include "Waves.h"
 
 const int gNumFrameResources = 3;
 
@@ -38,35 +43,23 @@ struct RenderItem {
 	int BaseVertexLocation = 0;
 };
 
+
 enum class RenderLayer : int {
 	Opaque = 0,
 	Count
 };
-
-
-const float pi = 3.14159265358979323846264338327950288f;
 
 class LandAndWavesApp : public VulkApp {
 	std::vector<std::unique_ptr<FrameResource>> mFrameResources;
 	FrameResource* mCurrFrameResource = nullptr;
 	int mCurrFrameResourceIndex = 0;
 
-	UINT mCbvSrvDescriptorSize = 0;
-	VkDescriptorSetLayout mDescriptorSetLayoutPC{ VK_NULL_HANDLE };
-	VkDescriptorSetLayout	mDescriptorSetLayoutOBs{ VK_NULL_HANDLE };
-	VkDescriptorPool		mDescriptorPool{ VK_NULL_HANDLE };
-	//VkDescriptorSet			mDescriptorSet{ VK_NULL_HANDLE };
-	std::vector<VkDescriptorSet> mDescriptorSetsPC;
-	std::vector<VkDescriptorSet> mDescriptorSetsOBs;
-	VkPipelineLayout		mPipelineLayout{ VK_NULL_HANDLE };
-
-
 	std::unordered_map<std::string, std::unique_ptr<MeshGeometry>> mGeometries;
+
 	std::unordered_map<std::string, VkPipeline> mPSOs;
 
 	RenderItem* mWavesRitem = nullptr;
 
-	// List of all the render items.
 	std::vector < std::unique_ptr<RenderItem>> mAllRItems;
 
 	// Render items divided by PSO.
@@ -75,6 +68,7 @@ class LandAndWavesApp : public VulkApp {
 	std::unique_ptr<Waves> mWaves;
 
 	PassConstants mMainPassCB;
+
 
 	bool mIsWireframe = false;
 
@@ -90,11 +84,20 @@ class LandAndWavesApp : public VulkApp {
 	float mSunPhi = pi / 4.0f;
 
 	POINT mLastMousePos;
-#ifdef __USE__STAGING__BUFFER__
-	VkFence waveFence{ VK_NULL_HANDLE };
-	Buffer wavesStagingBuffer;
-	Vertex* pWavesStagingBuffer{ nullptr };
-#endif
+
+	Vulkan::Buffer VertexBuffer;
+	Vulkan::Buffer IndexBuffer;
+	
+	Vulkan::Buffer WavesIndexBuffer;
+	std::vector<Vulkan::Buffer> WaveVertexBuffers;
+	std::vector<void*> WaveVertexPtrs;
+	
+
+	std::unique_ptr<ShaderResources> pipelineRes;
+	std::unique_ptr<ShaderProgram> prog;
+	std::unique_ptr<PipelineLayout> pipelineLayout;
+	std::unique_ptr<Pipeline> opaquePipeline;
+	std::unique_ptr<Pipeline> wireframePipeline;
 
 	virtual void OnResize()override;
 	virtual void Update(const GameTimer& gt)override;
@@ -108,17 +111,13 @@ class LandAndWavesApp : public VulkApp {
 	void UpdateObjectCBs(const GameTimer& gt);
 	void UpdateMainPassCB(const GameTimer& gt);
 	void UpdateWaves(const GameTimer& gt);
-	
-	void BuildRootSignature();
-	void BuildDescriptorHeaps();
-	//void BuildConstantBuffers();
+
 	void BuildLandGeometry();
 	void BuildWavesGeometryBuffers();
 	void BuildPSOs();
 	void BuildFrameResources();
 	void BuildRenderItems();
 	void DrawRenderItems(VkCommandBuffer cmd, const std::vector<RenderItem*>& ritems);
-
 	float GetHillsHeight(float x, float z)const;
 	glm::vec3 GetHillsNormal(float x, float z)const;
 public:
@@ -130,37 +129,10 @@ public:
 	virtual bool Initialize()override;
 };
 
-LandAndWavesApp::LandAndWavesApp(HINSTANCE hInstance) :VulkApp(hInstance){
+LandAndWavesApp::LandAndWavesApp(HINSTANCE hInstance) :VulkApp(hInstance) {
 	mAllowWireframe = true;
 	mClearValues[0].color = Colors::LightSteelBlue;
 	mMSAA = false;
-}
-
-LandAndWavesApp::~LandAndWavesApp() {
-	vkDeviceWaitIdle(mDevice);
-#ifdef __USE__STAGING__BUFFER__
-	cleanupFence(mDevice, waveFence);
-	unmapBuffer(mDevice, wavesStagingBuffer);
-	cleanupBuffer(mDevice, wavesStagingBuffer);
-#endif
-	for (auto& pair : mGeometries) {
-		
-		free(pair.second->indexBufferCPU);
-		if (pair.second->vertexBufferGPU.buffer != mWavesRitem->Geo->vertexBufferGPU.buffer) {
-			free(pair.second->vertexBufferCPU);
-			cleanupBuffer(mDevice,pair.second->vertexBufferGPU);
-		}
-		cleanupBuffer(mDevice, pair.second->indexBufferGPU);
-		//cleanupBuffer(mDevice, pair.second->vertexBufferGPU);
-	}
-	for (auto& pair : mPSOs) {
-		VkPipeline pipeline = pair.second;
-		cleanupPipeline(mDevice, pipeline);
-	}
-	cleanupPipelineLayout(mDevice, mPipelineLayout);
-	cleanupDescriptorPool(mDevice, mDescriptorPool);
-	cleanupDescriptorSetLayout(mDevice, mDescriptorSetLayoutOBs);
-	cleanupDescriptorSetLayout(mDevice, mDescriptorSetLayoutPC);
 }
 
 bool LandAndWavesApp::Initialize() {
@@ -168,44 +140,26 @@ bool LandAndWavesApp::Initialize() {
 		return false;
 
 	mWaves = std::make_unique<Waves>(128, 128, 1.0f, 0.03f, 4.0f, 0.2f);
-	BuildDescriptorHeaps();
+	
 	BuildLandGeometry();
 	BuildWavesGeometryBuffers();
 	BuildRenderItems();
-	BuildRootSignature();
 	
-	BuildFrameResources();
+
+	
 	BuildPSOs();
-#ifdef __USE__STAGING__BUFFER__
-	VkDeviceSize waveBufferSize = sizeof(Vertex) * mWaves->VertexCount();
-	initBuffer(mDevice, mMemoryProperties, waveBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, wavesStagingBuffer);
-	pWavesStagingBuffer= (Vertex*)mapBuffer(mDevice, wavesStagingBuffer);
-	waveFence = initFence(mDevice, VK_FENCE_CREATE_SIGNALED_BIT);
-#endif
-	
+	BuildFrameResources();
 	return true;
 }
 
-
-void LandAndWavesApp::BuildDescriptorHeaps() {
-	//don't really build heaps, just setup descriptors
-
-	std::vector<VkDescriptorSetLayoutBinding> bindings = {
-		{0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr}, //Binding 0, uniform (constant) buffer
-	
-	};
-	mDescriptorSetLayoutPC = initDescriptorSetLayout(mDevice, bindings);
-	mDescriptorSetLayoutOBs = initDescriptorSetLayout(mDevice, bindings);
-	std::vector<VkDescriptorPoolSize> poolSizes{
-		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,6},
-	
-	};
-	uint32_t count = getSwapchainImageCount(mSurfaceCaps);
-	mDescriptorPool = initDescriptorPool(mDevice, poolSizes, 6);
-	mDescriptorSetsPC.resize(count);
-	initDescriptorSets(mDevice, mDescriptorSetLayoutPC, mDescriptorPool, mDescriptorSetsPC.data(), count);
-	mDescriptorSetsOBs.resize(count);
-	initDescriptorSets(mDevice, mDescriptorSetLayoutOBs, mDescriptorPool, mDescriptorSetsOBs.data(), count);
+LandAndWavesApp::~LandAndWavesApp() {
+	Vulkan::cleanupBuffer(mDevice, IndexBuffer);
+	Vulkan::cleanupBuffer(mDevice, VertexBuffer);
+	Vulkan::cleanupBuffer(mDevice, WavesIndexBuffer);
+	for (auto& buffer : WaveVertexBuffers) {
+		Vulkan::unmapBuffer(mDevice, buffer);
+		Vulkan::cleanupBuffer(mDevice, buffer);
+	}
 }
 
 void LandAndWavesApp::BuildLandGeometry() {
@@ -226,7 +180,7 @@ void LandAndWavesApp::BuildLandGeometry() {
 			//Sandy beach color
 			vertices[i].Color = glm::vec4(1.0f, 0.96f, 0.62f, 1.0f);
 		}
-		else if(vertices[i].Pos.y < 5.0f){
+		else if (vertices[i].Pos.y < 5.0f) {
 			//Light yellow-green.
 			vertices[i].Color = glm::vec4(0.48f, 0.77f, 0.46f, 1.0f);
 		}
@@ -256,29 +210,61 @@ void LandAndWavesApp::BuildLandGeometry() {
 	geo->indexBufferCPU = malloc(ibByteSize);
 	memcpy(geo->indexBufferCPU, indices.data(), ibByteSize);
 
-	initBuffer(mDevice, mMemoryProperties, vbByteSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->vertexBufferGPU);
-	initBuffer(mDevice, mMemoryProperties, ibByteSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->indexBufferGPU);
+	
+
+	Vulkan::BufferProperties props;
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	props.size = vbByteSize;
+	Vulkan::initBuffer(mDevice, mMemoryProperties, props, VertexBuffer);
+
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	props.size = ibByteSize;
+	Vulkan::initBuffer(mDevice, mMemoryProperties, props, IndexBuffer);
 
 	VkDeviceSize maxSize = std::max(vbByteSize, ibByteSize);
-	Buffer stagingBuffer;
-	initBuffer(mDevice, mMemoryProperties, maxSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer);
+	Vulkan::Buffer stagingBuffer;
+
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+	props.size = maxSize;
+	initBuffer(mDevice, mMemoryProperties, props, stagingBuffer);
 	void* ptr = mapBuffer(mDevice, stagingBuffer);
 	//copy vertex data
 	memcpy(ptr, vertices.data(), vbByteSize);
-	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->vertexBufferGPU, vbByteSize);
+
+	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, VertexBuffer, vbByteSize);
 	memcpy(ptr, indices.data(), ibByteSize);
-	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->indexBufferGPU, ibByteSize);
+	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, IndexBuffer, ibByteSize);
 	unmapBuffer(mDevice, stagingBuffer);
 	cleanupBuffer(mDevice, stagingBuffer);
 
-	geo->vertexBufferByteSize = vbByteSize;
-	geo->vertexByteStride = sizeof(Vertex);
-	geo->indexBufferByteSize = ibByteSize;
+	geo->indexBufferGPU = IndexBuffer;
+	geo->vertexBufferGPU = VertexBuffer;
+
+
+	geo->VertexBufferByteSize = vbByteSize;
+	geo->VertexByteStride = sizeof(Vertex);
+	geo->IndexBufferByteSize = ibByteSize;
+
 
 	SubmeshGeometry submesh;
-	submesh.indexCount = (uint32_t)indices.size();
-	submesh.startIndexLocation = 0;
-	submesh.baseVertexLocation = 0;
+	submesh.IndexCount = (uint32_t)indices.size();
+	submesh.StartIndexLocation = 0;
+	submesh.BaseVertexLocation = 0;
 
 	geo->DrawArgs["grid"] = submesh;
 
@@ -301,7 +287,6 @@ glm::vec3 LandAndWavesApp::GetHillsNormal(float x, float z)const
 	glm::vec3 unitNormal = glm::normalize(n);
 	return unitNormal;
 }
-
 
 void LandAndWavesApp::BuildWavesGeometryBuffers() {
 	std::vector<uint32_t> indices(3 * mWaves->TriangleCount());//3 indices per face
@@ -333,37 +318,73 @@ void LandAndWavesApp::BuildWavesGeometryBuffers() {
 
 	//Set dynamically.
 	geo->vertexBufferCPU = nullptr;
-	
+
 
 	geo->indexBufferCPU = malloc(ibByteSize);
 	memcpy(geo->indexBufferCPU, indices.data(), ibByteSize);
 
-	initBuffer(mDevice, mMemoryProperties, ibByteSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->indexBufferGPU);
+	
+
+	Vulkan::BufferProperties props;
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	props.size = vbByteSize;
+	WaveVertexBuffers.resize(gNumFrameResources);
+	WaveVertexPtrs.resize(gNumFrameResources);
+	for (size_t i = 0; i < gNumFrameResources; i++) {
+		Vulkan::initBuffer(mDevice, mMemoryProperties, props, WaveVertexBuffers[i]);
+		WaveVertexPtrs[i] = Vulkan::mapBuffer(mDevice, WaveVertexBuffers[i]);
+	}
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	props.size = ibByteSize;
+	Vulkan::initBuffer(mDevice, mMemoryProperties, props, WavesIndexBuffer);
+	
+	
 
 	VkDeviceSize maxSize = std::max(vbByteSize, ibByteSize);
-	Buffer stagingBuffer;
-	initBuffer(mDevice, mMemoryProperties, maxSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer);
+	Vulkan::Buffer stagingBuffer;
+
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+	props.size = maxSize;
+	initBuffer(mDevice, mMemoryProperties, props, stagingBuffer);
 	void* ptr = mapBuffer(mDevice, stagingBuffer);
 	//copy vertex data
 	
 	memcpy(ptr, indices.data(), ibByteSize);
-	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->indexBufferGPU, ibByteSize);
+	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, WavesIndexBuffer, ibByteSize);
 	unmapBuffer(mDevice, stagingBuffer);
 	cleanupBuffer(mDevice, stagingBuffer);
 
-	geo->vertexBufferByteSize = vbByteSize;
-	geo->vertexByteStride = sizeof(Vertex);
-	geo->indexBufferByteSize = ibByteSize;
+	geo->indexBufferGPU = WavesIndexBuffer;
+
+	geo->VertexBufferByteSize = vbByteSize;
+	geo->VertexByteStride = sizeof(Vertex);
+	geo->IndexBufferByteSize = ibByteSize;
 
 	SubmeshGeometry submesh;
-	submesh.indexCount = (uint32_t)indices.size();
-	submesh.startIndexLocation = 0;
-	submesh.baseVertexLocation = 0;
+	submesh.IndexCount = (uint32_t)indices.size();
+	submesh.StartIndexLocation = 0;
+	submesh.BaseVertexLocation = 0;
 
 	geo->DrawArgs["grid"] = submesh;
 
 	mGeometries["waterGeo"] = std::move(geo);
 }
+
 
 void LandAndWavesApp::BuildRenderItems() {
 	auto wavesRitem = std::make_unique<RenderItem>();
@@ -371,9 +392,9 @@ void LandAndWavesApp::BuildRenderItems() {
 	wavesRitem->ObjCBIndex = 0;
 	wavesRitem->Geo = mGeometries["waterGeo"].get();
 	wavesRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-	wavesRitem->IndexCount = wavesRitem->Geo->DrawArgs["grid"].indexCount;
-	wavesRitem->StartIndexLocation = wavesRitem->Geo->DrawArgs["grid"].startIndexLocation;
-	wavesRitem->BaseVertexLocation = wavesRitem->Geo->DrawArgs["grid"].baseVertexLocation;
+	wavesRitem->IndexCount = wavesRitem->Geo->DrawArgs["grid"].IndexCount;
+	wavesRitem->StartIndexLocation = wavesRitem->Geo->DrawArgs["grid"].StartIndexLocation;
+	wavesRitem->BaseVertexLocation = wavesRitem->Geo->DrawArgs["grid"].BaseVertexLocation;
 
 	mWavesRitem = wavesRitem.get();
 
@@ -384,9 +405,9 @@ void LandAndWavesApp::BuildRenderItems() {
 	gridRitem->ObjCBIndex = 1;
 	gridRitem->Geo = mGeometries["landGeo"].get();
 	gridRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-	gridRitem->IndexCount = gridRitem->Geo->DrawArgs["grid"].indexCount;
-	gridRitem->StartIndexLocation = gridRitem->Geo->DrawArgs["grid"].startIndexLocation;
-	gridRitem->BaseVertexLocation = gridRitem->Geo->DrawArgs["grid"].baseVertexLocation;
+	gridRitem->IndexCount = gridRitem->Geo->DrawArgs["grid"].IndexCount;
+	gridRitem->StartIndexLocation = gridRitem->Geo->DrawArgs["grid"].StartIndexLocation;
+	gridRitem->BaseVertexLocation = gridRitem->Geo->DrawArgs["grid"].BaseVertexLocation;
 
 	mRitemLayer[(int)RenderLayer::Opaque].push_back(gridRitem.get());
 
@@ -395,34 +416,54 @@ void LandAndWavesApp::BuildRenderItems() {
 
 }
 
-void LandAndWavesApp::BuildRootSignature() {
-	//build pipeline layout
-	std::vector<VkDescriptorSetLayout> layouts = {
-		mDescriptorSetLayoutPC,
-		mDescriptorSetLayoutOBs
-	};
-	mPipelineLayout = initPipelineLayout(mDevice, layouts);
-}
-
 void LandAndWavesApp::BuildPSOs() {
-	std::vector<ShaderModule> shaders = {
-		{initShaderModule(mDevice,"shaders/color.vert.spv"),VK_SHADER_STAGE_VERTEX_BIT},
-		{initShaderModule(mDevice,"shaders/color.frag.spv"),VK_SHADER_STAGE_FRAGMENT_BIT}
+	pipelineRes = std::make_unique<ShaderResources>(mDevice, mDeviceProperties, mMemoryProperties);
+
+	std::vector<std::vector<ShaderResource>> pipelineResourceInfos{
+		{
+			{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT, sizeof(PassConstants),1,true},
+		},
+		{
+			{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT,sizeof(ObjectConstants),mAllRItems.size(),true},
+		}
 	};
-	VkPipeline opaquePipeline = initGraphicsPipeline(mDevice, mRenderPass, mPipelineLayout, shaders, Vertex::getInputBindingDescription(), Vertex::getInputAttributeDescription(), VK_CULL_MODE_FRONT_BIT, true, mMSAA ? mNumSamples : VK_SAMPLE_COUNT_1_BIT, VK_FALSE, VK_POLYGON_MODE_FILL);
-	VkPipeline wireframePipeline = initGraphicsPipeline(mDevice, mRenderPass, mPipelineLayout, shaders, Vertex::getInputBindingDescription(), Vertex::getInputAttributeDescription(), VK_CULL_MODE_FRONT_BIT, true, mMSAA ? mNumSamples : VK_SAMPLE_COUNT_1_BIT, VK_FALSE, VK_POLYGON_MODE_LINE);
+	pipelineRes->AddShaderResources(pipelineResourceInfos, 3);
 
-	mPSOs["opaque"] = opaquePipeline;
-	mPSOs["opaque_wireframe"] = wireframePipeline;
+	prog = std::make_unique<ShaderProgram>(mDevice);
+	std::vector<const char*> shaderPaths = { "Shaders/color.vert.spv","Shaders/color.frag.spv" };
+	prog->load(shaderPaths);
 
+	pipelineLayout = std::make_unique<PipelineLayout>(mDevice, *pipelineRes);
+	Vulkan::PipelineInfo pipelineInfo;
+	pipelineInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+	pipelineInfo.polygonMode = VK_POLYGON_MODE_FILL;
+	pipelineInfo.depthTest = VK_TRUE;
 
-	cleanupShaderModule(mDevice, shaders[0].shaderModule);
-	cleanupShaderModule(mDevice, shaders[1].shaderModule);
+	opaquePipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+
+	pipelineInfo.polygonMode = VK_POLYGON_MODE_LINE;
+	wireframePipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+
+	mPSOs["opaque"] = *opaquePipeline;
+	mPSOs["opaque_wireframe"] = *wireframePipeline;
 }
 
-void LandAndWavesApp::BuildFrameResources() {	
+void LandAndWavesApp::BuildFrameResources() {
+	
+	void* pPassCB = pipelineRes->GetShaderResource(0).buffer.ptr;
+	VkDeviceSize passSize = pipelineRes->GetShaderResource(0).buffer.objectSize;
+	void* pObjectCB = pipelineRes->GetShaderResource(1).buffer.ptr;
+	VkDeviceSize objectSize = pipelineRes->GetShaderResource(1).buffer.objectSize;
+	VkDeviceSize waveSize = mWaves->VertexCount() * sizeof(Vertex);
 	for (int i = 0; i < gNumFrameResources; i++) {
-		mFrameResources.push_back(std::make_unique<FrameResource>(mDevice, mMemoryProperties, mDescriptorSetsPC[i], mDescriptorSetsOBs[i], (uint32_t)mDeviceProperties.limits.minUniformBufferOffsetAlignment, 1, (uint32_t)mAllRItems.size(),mWaves->VertexCount()));
+
+		//PassConstants* pc = (PassConstants*)mVulkanManager->GetBufferPtr(passConstantHash, 0);
+		//ObjectConstants* oc = (ObjectConstants*)((uint8_t*)mVulkanManager->GetBufferPtr(objectConstantHash, 0)+i*mVulkanManager->GetBufferOffset(objectConstantHash,0));
+
+		PassConstants* pc = (PassConstants*)((uint8_t*)pPassCB + passSize * i);
+		ObjectConstants* oc = (ObjectConstants*)((uint8_t*)pObjectCB + objectSize * mAllRItems.size() * i);
+		Vertex* pWv = (Vertex*)WaveVertexPtrs[i];
+		mFrameResources.push_back(std::make_unique<FrameResource>(pc, oc,pWv));
 	}
 }
 
@@ -432,6 +473,7 @@ void LandAndWavesApp::OnResize() {
 }
 
 void LandAndWavesApp::Update(const GameTimer& gt) {
+	VulkApp::Update(gt);
 	OnKeyboardInput(gt);
 	UpdateCamera(gt);
 
@@ -441,65 +483,12 @@ void LandAndWavesApp::Update(const GameTimer& gt) {
 
 	// Has the GPU finished processing the commands of the current frame resource?
 	// If not, wait until the GPU has completed commands up to this fence point.
-	vkWaitForFences(mDevice, 1, &mCurrFrameResource->Fence, VK_TRUE, UINT64_MAX);
-	vkResetFences(mDevice, 1, &mCurrFrameResource->Fence);
+	/*vkWaitForFences(mDevice, 1, &mCurrFrameResource->Fence, VK_TRUE, UINT64_MAX);
+	vkResetFences(mDevice, 1, &mCurrFrameResource->Fence);*/
 	UpdateObjectCBs(gt);
 	UpdateMainPassCB(gt);
 	UpdateWaves(gt);
-}
 
-
-void LandAndWavesApp::Draw(const GameTimer& gt) {
-	uint32_t index = 0;
-	VkCommandBuffer cmd{ VK_NULL_HANDLE };
-
-	cmd = BeginRender();
-
-	VkViewport viewport = { 0.0f,0.0f,(float)mClientWidth,(float)mClientHeight,0.0f,1.0f };
-	pvkCmdSetViewport(cmd, 0, 1, &viewport);
-	VkRect2D scissor = { {0,0},{(uint32_t)mClientWidth,(uint32_t)mClientHeight} };
-	pvkCmdSetScissor(cmd, 0, 1, &scissor);
-
-	if (mIsWireframe) {
-		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["opaque_wireframe"]);
-	}
-	else {
-		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["opaque"]);
-	}
-
-
-
-	DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Opaque]);
-
-	EndRender(cmd, mCurrFrameResource->Fence);
-
-
-}
-
-void LandAndWavesApp::DrawRenderItems(VkCommandBuffer cmd, const std::vector<RenderItem*>& ritems) {
-	VkDeviceSize obSize = mCurrFrameResource->ObjectCBSize;
-	VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
-	VkDeviceSize objSize = ((uint32_t)sizeof(ObjectConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
-	uint32_t dynamicOffsets[1] = { 0 };
-	pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets);//bind PC data once
-	for (size_t i = 0; i < ritems.size(); i++) {
-		auto ri = ritems[i];
-		uint32_t indexOffset = ri->StartIndexLocation;
-
-
-		const auto vbv = ri->Geo->vertexBufferGPU;
-		pvkCmdBindVertexBuffers(cmd, 0, 1, &vbv.buffer, mOffsets);
-		const auto ibv = ri->Geo->indexBufferGPU;
-		pvkCmdBindIndexBuffer(cmd, ibv.buffer, indexOffset * sizeof(uint32_t), VK_INDEX_TYPE_UINT32);
-		uint32_t cbvIndex = ri->ObjCBIndex;
-
-
-		//uint32_t dynamicOffsets[2] = { 0,cbvIndex *objSize};
-		dynamicOffsets[0] = (uint32_t)(cbvIndex * objSize);
-		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsOBs[mIndex], 2, dynamicOffsets);
-		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 1, 1, &mDescriptorSetsOBs[mIndex], 1, dynamicOffsets);
-		pvkCmdDrawIndexed(cmd, ri->IndexCount, 1, 0, ri->BaseVertexLocation, 0);
-	}
 }
 
 void LandAndWavesApp::OnMouseDown(WPARAM btnState, int x, int y) {
@@ -542,13 +531,6 @@ void LandAndWavesApp::OnMouseMove(WPARAM btnState, int x, int y) {
 	mLastMousePos.y = y;
 }
 
-void LandAndWavesApp::OnKeyboardInput(const GameTimer& gt)
-{
-	if (GetAsyncKeyState('1') & 0x8000)
-		mIsWireframe = true;
-	else
-		mIsWireframe = false;
-}
 
 void LandAndWavesApp::UpdateCamera(const GameTimer& gt) {
 	float x = mRadius * sinf(mPhi) * cosf(mTheta);
@@ -563,10 +545,10 @@ void LandAndWavesApp::UpdateCamera(const GameTimer& gt) {
 }
 
 void LandAndWavesApp::UpdateObjectCBs(const GameTimer& gt) {
-	auto currObjectCB = mCurrFrameResource->ObjectCB;
+	
 	uint8_t* pObjConsts = (uint8_t*)mCurrFrameResource->pOCs;
-	VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
-	VkDeviceSize objSize = ((uint32_t)sizeof(ObjectConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
+	VkDeviceSize objectSize = pipelineRes->GetShaderResource(1).buffer.objectSize;
+	
 	for (auto& e : mAllRItems) {
 		//Only update the cbuffer data if the constants have changed.
 		//This needs to be tracked per frame resource.
@@ -574,8 +556,10 @@ void LandAndWavesApp::UpdateObjectCBs(const GameTimer& gt) {
 			glm::mat4 world = e->World;
 			ObjectConstants objConstants;
 			objConstants.World = world;
-			memcpy((pObjConsts + (objSize * e->ObjCBIndex)), &objConstants, sizeof(objConstants));
-			//pObjConsts[e->ObjCBIndex] = objConstants;
+			
+			uint8_t* ptr = pObjConsts + e->ObjCBIndex * objectSize;
+			memcpy(ptr, &objConstants, sizeof(objConstants));
+			
 			e->NumFramesDirty--;
 		}
 	}
@@ -624,23 +608,91 @@ void LandAndWavesApp::UpdateWaves(const GameTimer& gt) {
 	//Update the wave simulation
 	mWaves->Update(gt.DeltaTime());
 	VkDeviceSize waveBufferSize = sizeof(Vertex) * mWaves->VertexCount();
-	
+
 	//update the wave vertex buffer with the new solution.
-#ifdef __USE__STAGING__BUFFER__
-	Vertex* pWaves = pWavesStagingBuffer;
-#else
-	Vertex* pWaves = mCurrFrameResource->pWavesVB;
-#endif
+
+	
+	Vertex*pWaves= mCurrFrameResource->pWavesVB;
 
 	for (int i = 0; i < mWaves->VertexCount(); ++i) {
 		pWaves[i].Pos = mWaves->Position(i);
 		pWaves[i].Color = glm::vec4(Colors::colortovec(Colors::Blue));
-		
+
 	}
-#ifdef __USE__STAGING__BUFFER__
-	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, waveFence,wavesStagingBuffer, mCurrFrameResource->WavesVB, waveBufferSize);
-#endif
-	mWavesRitem->Geo->vertexBufferGPU = mCurrFrameResource->WavesVB;
+
+	mWavesRitem->Geo->vertexBufferGPU = WaveVertexBuffers[mCurrFrameResourceIndex];
+	
+}
+
+
+
+
+
+void LandAndWavesApp::OnKeyboardInput(const GameTimer& gt) {
+	if (GetAsyncKeyState('1') & 0x8000)
+		mIsWireframe = true;
+	else
+		mIsWireframe = false;
+}
+
+
+
+void LandAndWavesApp::Draw(const GameTimer& gt) {
+	uint32_t index = 0;
+	VkCommandBuffer cmd{ VK_NULL_HANDLE };
+
+	cmd = BeginRender();
+
+	VkViewport viewport = { 0.0f,0.0f,(float)mClientWidth,(float)mClientHeight,0.0f,1.0f };
+	pvkCmdSetViewport(cmd, 0, 1, &viewport);
+	VkRect2D scissor = { {0,0},{(uint32_t)mClientWidth,(uint32_t)mClientHeight} };
+	pvkCmdSetScissor(cmd, 0, 1, &scissor);
+
+	if (mIsWireframe) {
+		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *wireframePipeline);// mPSOs["opaque_wireframe"]);
+	}
+	else {
+		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *opaquePipeline);// mPSOs["opaque"]);
+	}
+
+
+
+
+	DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Opaque]);
+
+	//DrawRenderItems(cmd, mIsWireframe ? wireframeHash : solidHash, mOpaqueRitems);
+
+	EndRender(cmd);// , mCurrFrameResource->Fence);
+
+
+}
+
+void LandAndWavesApp::DrawRenderItems(VkCommandBuffer cmd, const std::vector<RenderItem*>& ritems) {
+	uint32_t dynamicOffsets[1] = { 0 };
+	VkDescriptorSet descriptor = pipelineRes->GetDescriptorSet(0, mCurrFrame);
+	pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 0, 1, &descriptor, 1, dynamicOffsets);//bind PC data once
+	//pvkCmdBindVertexBuffers(cmd, 0, 1, &VertexBuffer.buffer, mOffsets);
+	VkDeviceSize objectSize = pipelineRes->GetShaderResource(1).buffer.objectSize;
+	for (size_t i = 0; i < ritems.size(); i++) {
+		auto ri = ritems[i];
+		uint32_t indexOffset = ri->StartIndexLocation;
+
+		const auto vbv = ri->Geo->vertexBufferGPU;
+		const auto ibv = ri->Geo->indexBufferGPU;
+		pvkCmdBindVertexBuffers(cmd, 0, 1, &vbv.buffer, mOffsets);
+
+	
+		pvkCmdBindIndexBuffer(cmd, ibv.buffer, indexOffset * sizeof(uint32_t), VK_INDEX_TYPE_UINT32);
+		uint32_t cbvIndex = ri->ObjCBIndex;
+
+
+	
+		dynamicOffsets[0] = (uint32_t)(cbvIndex * objectSize);
+
+		VkDescriptorSet descriptor2 = pipelineRes->GetDescriptorSet(1, mCurrFrame);
+		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 1, 1, &descriptor2, 1, dynamicOffsets);
+		pvkCmdDrawIndexed(cmd, ri->IndexCount, 1, 0, ri->BaseVertexLocation, 0);
+	}
 }
 
 int main() {
@@ -663,4 +715,3 @@ int main() {
 		return 0;
 	}
 }
-

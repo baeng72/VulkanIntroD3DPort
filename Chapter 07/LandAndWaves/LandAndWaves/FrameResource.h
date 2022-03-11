@@ -2,12 +2,10 @@
 #include "../../../Common/Vulkan.h"
 #include <glm/glm.hpp>
 
-//#define __USE_STAGING_BUFFER__
 
 struct ObjectConstants {
 	glm::mat4 World = glm::mat4(1.0f);
 };
-
 
 struct PassConstants {
 	glm::mat4 View = glm::mat4(1.0f);
@@ -29,7 +27,7 @@ struct PassConstants {
 struct Vertex {
 	glm::vec3 Pos;
 	glm::vec4 Color;
-	static VkVertexInputBindingDescription& getInputBindingDescription() {
+	/*static VkVertexInputBindingDescription& getInputBindingDescription() {
 		static VkVertexInputBindingDescription bindingDescription = { 0,sizeof(Vertex),VK_VERTEX_INPUT_RATE_VERTEX };
 		return bindingDescription;
 	}
@@ -39,27 +37,18 @@ struct Vertex {
 			{1,0,VK_FORMAT_R32G32B32A32_SFLOAT,offsetof(Vertex,Color)},
 		};
 		return attributeDescriptions;
-	}
+	}*/
 };
 
+
 struct FrameResource {
-	FrameResource(VkDevice device, VkPhysicalDeviceMemoryProperties memoryProperties, VkDescriptorSet descriptorSetPC, VkDescriptorSet descriptorSetOBs, uint32_t minAlignmentSize, uint32_t passCount, uint32_t objectCount,uint32_t waveVertCount);
+	FrameResource(PassConstants* pc, ObjectConstants* oc, Vertex*pWvs);
 	FrameResource(const FrameResource& rhs) = delete;
 	FrameResource& operator=(const FrameResource& rhs) = delete;
 	~FrameResource();
-	VkDevice device{ VK_NULL_HANDLE };
-
-	VkFence Fence{ VK_NULL_HANDLE };
-	Buffer	PassCB;
-	Buffer	ObjectCB;
-#ifdef __USE__COMPUTE__SHADER__
-#else
-	Buffer  WavesVB;
-#endif
+	
 	PassConstants* pPCs{ nullptr };
 	ObjectConstants* pOCs{ nullptr };
-#ifndef __USE__STAGING__BUFFER__ 
 	Vertex* pWavesVB{ nullptr };
-#endif
-	VkDeviceSize ObjectCBSize{ 0 };
+
 };

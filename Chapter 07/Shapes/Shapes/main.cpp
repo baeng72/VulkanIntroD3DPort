@@ -1,15 +1,20 @@
-#include "../../../Common/VulkApp.h"
-#include "../../../Common/VulkUtil.h"
-#include "../../../Common/GeometryGenerator.h"
-#include "../../../Common/MathHelper.h"
-#include "../../../Common/Colors.h"
+#include "../../Common/VulkApp.h"
+//#include "../../Common/VulkanManager.h"
+#include "../../Common/VulkUtil.h"
+#include "../../Common/MathHelper.h"
+#include "../../Common/Colors.h"
+#include "../../Common/GeometryGenerator.h"
 #include "FrameResource.h"
 #include <memory>
+#include <array>
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+
+#include "../../ThirdParty/spirv-reflect/spirv_reflect.h"
 #include <fstream>
+#include "test.h"
 const int gNumFrameResources = 3;
 
 //Lightweight structure stores parameters to draw a shape. 
@@ -30,32 +35,42 @@ struct RenderItem {
 	VkPrimitiveTopology PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
 	//vkCmdDrawIndexed parameters
-	uint32_t indexCount = 0;
-	uint32_t startIndexLocation = 0;
+	uint32_t IndexCount = 0;
+	uint32_t StartIndexLocation = 0;
 	uint32_t BaseVertexLocation = 0;
 };
 
-const float pi = 3.14159265358979323846264338327950288f;
+struct Vertex {
+	glm::vec3 Pos;
+	glm::vec4 Color;
+	static VkVertexInputBindingDescription& getInputBindingDescription() {
+		static VkVertexInputBindingDescription bindingDescription = { 0,sizeof(Vertex),VK_VERTEX_INPUT_RATE_VERTEX };
+		return bindingDescription;
+	}
+	static std::vector<VkVertexInputAttributeDescription>& getInputAttributeDescription() {
+		static std::vector<VkVertexInputAttributeDescription> attributeDescriptions = {
+			{0,0,VK_FORMAT_R32G32B32_SFLOAT,offsetof(Vertex,Pos)},
+			{1,0,VK_FORMAT_R32G32B32A32_SFLOAT,offsetof(Vertex,Color)},
+		};
+		return attributeDescriptions;
+	}
+};
+
 class ShapesApp : public VulkApp {
 	std::vector<std::unique_ptr<FrameResource>> mFrameResources;
 	FrameResource* mCurrFrameResource{ nullptr };
 	int mCurrFrameResourceIndex{ 0 };
-	VkDescriptorSetLayout mDescriptorSetLayoutPC{ VK_NULL_HANDLE };
-	VkDescriptorSetLayout	mDescriptorSetLayoutOBs{ VK_NULL_HANDLE };
-	VkDescriptorPool		mDescriptorPool{ VK_NULL_HANDLE };
-	//VkDescriptorSet			mDescriptorSet{ VK_NULL_HANDLE };
-	std::vector<VkDescriptorSet> mDescriptorSetsPC;
-	std::vector<VkDescriptorSet> mDescriptorSetsOBs;
-	VkPipelineLayout		mPipelineLayout{ VK_NULL_HANDLE };
-	
 
 	std::unordered_map<std::string, std::unique_ptr<MeshGeometry>> mGeometries;
-	std::unordered_map<std::string, VkPipeline> mPSOs;
+
+	std::unordered_map<std::string, size_t> mPSOs;
 
 	std::vector < std::unique_ptr<RenderItem>> mAllRItems;
 
 	//RenderItems divided by Pipeline object
 	std::vector<RenderItem*> mOpaqueRitems;
+
+	//std::unique_ptr<VulkanManager> mVulkanManager;
 
 	PassConstants mMainPassCB;
 
@@ -72,6 +87,39 @@ class ShapesApp : public VulkApp {
 	float mRadius = 15.0f;
 
 	POINT mLastMousePos;
+
+	size_t passConstantHash{ 0 };
+	size_t objectConstantHash{ 0 };
+
+	Vulkan::Buffer VertexBuffer;
+	Vulkan::Buffer IndexBuffer;
+
+	/*Vulkan::Buffer PassCBBuffer;
+	Vulkan::Buffer ObjectCBBuffer;
+	VkDeviceSize passSize{ 0 };
+	VkDeviceSize objectSize{ 0 };
+	void* pPassCB{ nullptr };
+	void* pObjectCB{ nullptr };
+	VkShaderStageFlags passStage{ VK_SHADER_STAGE_VERTEX_BIT };
+	VkShaderStageFlags objectStage{ VK_SHADER_STAGE_VERTEX_BIT };
+	VkDescriptorType passDescriptorType{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC };
+	VkDescriptorType objectDescriptorType{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC };
+	std::vector<VkDescriptorBufferInfo> passBufferInfo;
+	std::vector<VkDescriptorBufferInfo> objectBufferInfo;
+
+	std::vector<VkDescriptorSetLayout> descriptorSetLayouts;
+	VkDescriptorPool descriptorPool;
+	std::vector < std::vector<VkDescriptorSet>> descriptorSets;
+	VkPipelineLayout pipelineLayout{ VK_NULL_HANDLE };
+	VkPipeline opaquePipeline{ VK_NULL_HANDLE };
+	VkPipeline wireframePipeline{ VK_NULL_HANDLE };*/
+
+	std::unique_ptr<ShaderResources> pipelineRes;
+	std::unique_ptr<ShaderProgram> prog;
+	std::unique_ptr<PipelineLayout> pipelineLayout;
+	std::unique_ptr<Pipeline> opaquePipeline;
+	std::unique_ptr<Pipeline> wireframePipeline;
+
 
 	virtual void OnResize()override;
 	virtual void Update(const GameTimer& gt)override;
@@ -91,7 +139,9 @@ class ShapesApp : public VulkApp {
 	void BuildPSOs();
 	void BuildFrameResources();
 	void BuildRenderItems();
+	void DrawRenderItems(VkCommandBuffer cmd, size_t hash, const std::vector<RenderItem*>& ritems);
 	void DrawRenderItems(VkCommandBuffer cmd, const std::vector<RenderItem*>& ritems);
+
 
 public:
 	ShapesApp(HINSTANCE hInstance);
@@ -109,46 +159,55 @@ ShapesApp::ShapesApp(HINSTANCE hInstance) :VulkApp(hInstance) {
 }
 
 ShapesApp::~ShapesApp() {
-	vkDeviceWaitIdle(mDevice);
-	for (auto& pair : mGeometries) {
-		free(pair.second->indexBufferCPU);
-		free(pair.second->vertexBufferCPU);
-		cleanupBuffer(mDevice, pair.second->indexBufferGPU);
-		cleanupBuffer(mDevice, pair.second->vertexBufferGPU);
-
+	Vulkan::cleanupBuffer(mDevice, IndexBuffer);
+	Vulkan::cleanupBuffer(mDevice, VertexBuffer);
+	/*Vulkan::cleanupPipeline(mDevice, wireframePipeline);
+	Vulkan::cleanupPipeline(mDevice, opaquePipeline);
+	Vulkan::cleanupPipelineLayout(mDevice, pipelineLayout);
+	for (auto& descriptorSetLayout : descriptorSetLayouts) {
+		Vulkan::cleanupDescriptorSetLayout(mDevice, descriptorSetLayout);
 	}
-	for (auto& pair : mPSOs) {
-		VkPipeline pipeline = pair.second;
-		cleanupPipeline(mDevice, pipeline);
-	}
-	cleanupPipelineLayout(mDevice, mPipelineLayout);
-	/*for (auto& desc : mDescriptorSets) {
-		cleanupDescriptorSet(mDevice, desc);
-	}*/
-	cleanupDescriptorPool(mDevice, mDescriptorPool);
-	cleanupDescriptorSetLayout(mDevice, mDescriptorSetLayoutOBs);
-	cleanupDescriptorSetLayout(mDevice, mDescriptorSetLayoutPC);
+	Vulkan::cleanupDescriptorPool(mDevice, descriptorPool);
+	Vulkan::unmapBuffer(mDevice, PassCBBuffer);
+	Vulkan::cleanupBuffer(mDevice, PassCBBuffer);
+	Vulkan::unmapBuffer(mDevice, ObjectCBBuffer);
+	Vulkan::cleanupBuffer(mDevice, ObjectCBBuffer);*/
 }
 
 bool ShapesApp::Initialize() {
 	if (!VulkApp::Initialize())
 		return false;
-	BuildDescriptorHeaps();
+
+	/*VMVulkanInfo vulkanInfo;
+	vulkanInfo.device = mDevice;
+	vulkanInfo.commandBuffer = mCommandBuffer;
+	vulkanInfo.memoryProperties = mMemoryProperties;
+	vulkanInfo.queue = mGraphicsQueue;
+	vulkanInfo.formatProperties = mFormatProperties;
+	vulkanInfo.deviceProperties = mDeviceProperties;*/
+	
+	//mVulkanManager = std::make_unique<VulkanManager>(vulkanInfo);
+
 	BuildShapeGeometry();
 	BuildRenderItems();
-	BuildFrameResources();
+
 	BuildConstantBuffers();
-	BuildRootSignature();
 	BuildPSOs();
+	BuildFrameResources();
+	
+	
 	return true;
 }
+
 
 void ShapesApp::OnResize() {
 	VulkApp::OnResize();
 	mProj = glm::perspectiveFovLH(0.25f * pi, (float)mClientWidth, (float)mClientHeight, 1.0f, 1000.0f);
 }
 
+
 void ShapesApp::Update(const GameTimer& gt) {
+	VulkApp::Update(gt);
 	OnKeyboardInput(gt);
 	UpdateCamera(gt);
 
@@ -158,8 +217,8 @@ void ShapesApp::Update(const GameTimer& gt) {
 
 	// Has the GPU finished processing the commands of the current frame resource?
 	// If not, wait until the GPU has completed commands up to this fence point.
-	vkWaitForFences(mDevice, 1, &mCurrFrameResource->Fence, VK_TRUE, UINT64_MAX);
-	vkResetFences(mDevice, 1, &mCurrFrameResource->Fence);
+	/*vkWaitForFences(mDevice, 1, &mCurrFrameResource->Fence, VK_TRUE, UINT64_MAX);
+	vkResetFences(mDevice, 1, &mCurrFrameResource->Fence);*/
 	UpdateObjectCBs(gt);
 	UpdateMainPassCB(gt);
 
@@ -177,44 +236,69 @@ void ShapesApp::Draw(const GameTimer& gt) {
 	pvkCmdSetScissor(cmd, 0, 1, &scissor);
 
 	if (mIsWireframe) {
-		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["opaque_wireframe"]);
+		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *wireframePipeline);// mPSOs["opaque_wireframe"]);
 	}
 	else {
-		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["opaque"]);
+		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *opaquePipeline);// mPSOs["opaque"]);
 	}
 
-	
 
+	
+	
 	DrawRenderItems(cmd, mOpaqueRitems);
 
-	EndRender(cmd,mCurrFrameResource->Fence);
+	//DrawRenderItems(cmd, mIsWireframe ? wireframeHash : solidHash, mOpaqueRitems);
 
-	
+	EndRender(cmd);// , mCurrFrameResource->Fence);
+
+
 }
 
+
 void ShapesApp::DrawRenderItems(VkCommandBuffer cmd, const std::vector<RenderItem*>& ritems) {
-	VkDeviceSize obSize = mCurrFrameResource->ObjectCBSize;
-	VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
-	VkDeviceSize objSize = ((uint32_t)sizeof(ObjectConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
-	uint32_t dynamicOffsets[1] = { 0 };
-	pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets);//bind PC data once
+	//size_t hash = mIsWireframe ? mPSOs["wireframe"] : mPSOs["opaque"];
+	/*std::vector<VMDrawObjectPart> parts;
+	size_t objectHash = 0;
 	for (size_t i = 0; i < ritems.size(); i++) {
 		auto ri = ritems[i];
-		uint32_t indexOffset = ri->startIndexLocation;
-		
+		parts.push_back({ri->IndexCount,ri->StartIndexLocation,ri->BaseVertexLocation,ri->ObjCBIndex});		
+		objectHash = ri->Geo->hash;
 
-		const auto vbv = ri->Geo->vertexBufferGPU;
-		pvkCmdBindVertexBuffers(cmd, 0, 1, &vbv.buffer, mOffsets);
-		const auto ibv = ri->Geo->indexBufferGPU;
-		pvkCmdBindIndexBuffer(cmd, ibv.buffer, indexOffset*sizeof(uint32_t), VK_INDEX_TYPE_UINT32);
-		uint32_t cbvIndex = ri->ObjCBIndex;
+	}
+	
+	VMDrawInfo drawInfo;
+	drawInfo.pvkCmdBindDescriptorSets = pvkCmdBindDescriptorSets;
+	drawInfo.pvkCmdBindIndexBuffer = pvkCmdBindIndexBuffer;
+	drawInfo.pvkCmdBindPipeline = pvkCmdBindPipeline;
+	drawInfo.pvkCmdBindVertexBuffers = pvkCmdBindVertexBuffers;
+	drawInfo.pvkCmdDrawIndexed = pvkCmdDrawIndexed;*/
+	//mVulkanManager->DrawParts(hash, objectHash,drawInfo,cmd,  parts,1,mCurrFrame);
+	
+	//VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
+	//VkDeviceSize objSize = mCurrFrameResource->ObjectCBSize;
+	uint32_t dynamicOffsets[1] = { 0 };
+	//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[0][mCurrFrame], 1, dynamicOffsets);//bind PC data once
+	pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 0, 1, &pipelineRes->descriptorSets[0][mCurrFrame], 1, dynamicOffsets);//bind PC data once
+	pvkCmdBindVertexBuffers(cmd, 0, 1, &VertexBuffer.buffer, mOffsets);
+	VkDeviceSize objectSize = pipelineRes->pipelineResources[1].buffer.objectSize;
+	for (size_t i = 0; i < ritems.size(); i++) {
+		auto ri = ritems[i];
+		uint32_t indexOffset = ri->StartIndexLocation;
+
+
+	//	const auto vbv = ri->Geo->vertexBufferGPU;
+		//pvkCmdBindVertexBuffers(cmd, 0, 1, &VertexBuffer.buffer, mOffsets);
 		
-			
-		//uint32_t dynamicOffsets[2] = { 0,cbvIndex *objSize};
-		dynamicOffsets[0] =(uint32_t)( cbvIndex * objSize);
-		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsOBs[mIndex], 2, dynamicOffsets);
-		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 1, 1, &mDescriptorSetsOBs[mIndex], 1, dynamicOffsets);
-		pvkCmdDrawIndexed(cmd, ri->indexCount, 1, 0, ri->BaseVertexLocation, 0);
+		pvkCmdBindIndexBuffer(cmd, IndexBuffer.buffer, indexOffset * sizeof(uint32_t), VK_INDEX_TYPE_UINT32);
+		uint32_t cbvIndex = ri->ObjCBIndex;
+
+
+	//	//uint32_t dynamicOffsets[2] = { 0,cbvIndex *objSize};
+		dynamicOffsets[0] = (uint32_t)(cbvIndex * objectSize);
+		
+		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1, &descriptorSets[1][mCurrFrame], 1, dynamicOffsets);
+		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 1, 1, &pipelineRes->descriptorSets[1][mCurrFrame], 1, dynamicOffsets);
+		pvkCmdDrawIndexed(cmd, ri->IndexCount, 1, 0, ri->BaseVertexLocation, 0);
 	}
 }
 
@@ -279,10 +363,12 @@ void ShapesApp::UpdateCamera(const GameTimer& gt) {
 }
 
 void ShapesApp::UpdateObjectCBs(const GameTimer& gt) {
-	auto currObjectCB = mCurrFrameResource->ObjectCB;
+	//auto currObjectCB = mCurrFrameResource->ObjectCB;
 	uint8_t* pObjConsts = (uint8_t*)mCurrFrameResource->pOCs;
-	VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
-	VkDeviceSize objSize = ((uint32_t)sizeof(ObjectConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
+	VkDeviceSize objectSize = pipelineRes->pipelineResources[1].buffer.objectSize;
+	//VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
+	//VkDeviceSize objSize = ((uint32_t)sizeof(ObjectConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
+	//VkDeviceSize objSize = mVulkanManager->GetBufferOffset(objectConstantHash, 0);
 	for (auto& e : mAllRItems) {
 		//Only update the cbuffer data if the constants have changed.
 		//This needs to be tracked per frame resource.
@@ -290,7 +376,9 @@ void ShapesApp::UpdateObjectCBs(const GameTimer& gt) {
 			glm::mat4 world = e->World;
 			ObjectConstants objConstants;
 			objConstants.World = world;
-			memcpy((pObjConsts + (objSize * e->ObjCBIndex)), &objConstants, sizeof(objConstants));
+			//memcpy((pObjConsts + (objSize * e->ObjCBIndex)), &objConstants, sizeof(objConstants));
+			uint8_t* ptr = pObjConsts + e->ObjCBIndex * objectSize;
+			memcpy(ptr, &objConstants, sizeof(objConstants));
 			//pObjConsts[e->ObjCBIndex] = objConstants;
 			e->NumFramesDirty--;
 		}
@@ -323,116 +411,39 @@ void ShapesApp::UpdateMainPassCB(const GameTimer& gt) {
 	memcpy(pPassConstants, &mMainPassCB, sizeof(PassConstants));
 }
 
-void ShapesApp::BuildDescriptorHeaps() {
-	//don't really build heaps, just setup descriptors
-
-	std::vector<VkDescriptorSetLayoutBinding> bindings = {
-		{0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr}, //Binding 0, uniform (constant) buffer
-	//	{1,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,1,VK_SHADER_STAGE_VERTEX_BIT,nullptr}, //Binding 1, uniform (constant) buffer
-	};
-	mDescriptorSetLayoutPC = initDescriptorSetLayout(mDevice, bindings);
-	mDescriptorSetLayoutOBs = initDescriptorSetLayout(mDevice, bindings);
-	std::vector<VkDescriptorPoolSize> poolSizes{
-		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,6},
-	//	{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,3},
-	};
-	uint32_t count = getSwapchainImageCount(mSurfaceCaps);
-	mDescriptorPool = initDescriptorPool(mDevice, poolSizes,6);
-	mDescriptorSetsPC.resize(count);
-	initDescriptorSets(mDevice, mDescriptorSetLayoutPC, mDescriptorPool, mDescriptorSetsPC.data(), count);
-	mDescriptorSetsOBs.resize(count);
-	initDescriptorSets(mDevice, mDescriptorSetLayoutOBs, mDescriptorPool,mDescriptorSetsOBs.data(), count);
-	
-	
-
-}
-
 void ShapesApp::BuildFrameResources() {
+	void* pPassCB = pipelineRes->pipelineResources[0].buffer.ptr;
+	VkDeviceSize passSize = pipelineRes->pipelineResources[0].buffer.objectSize;
+	void* pObjectCB = pipelineRes->pipelineResources[1].buffer.ptr;
+	VkDeviceSize objectSize = pipelineRes->pipelineResources[1].buffer.objectSize;
+
 	for (int i = 0; i < gNumFrameResources; i++) {
-		mFrameResources.push_back(std::make_unique<FrameResource>(mDevice, mMemoryProperties, mDescriptorSetsPC[i],mDescriptorSetsOBs[i],(uint32_t) mDeviceProperties.limits.minUniformBufferOffsetAlignment, 1, (uint32_t)mAllRItems.size()));
+
+		//PassConstants* pc = (PassConstants*)mVulkanManager->GetBufferPtr(passConstantHash, 0);
+		//ObjectConstants* oc = (ObjectConstants*)((uint8_t*)mVulkanManager->GetBufferPtr(objectConstantHash, 0)+i*mVulkanManager->GetBufferOffset(objectConstantHash,0));
+
+		PassConstants* pc = (PassConstants*)((uint8_t*)pPassCB + passSize * i);
+		ObjectConstants* oc = (ObjectConstants*)((uint8_t*)pObjectCB + objectSize*mAllRItems.size() * i);
+		mFrameResources.push_back(std::make_unique<FrameResource>(pc,oc));
 	}
 }
 
-void writeObj(const char* objName, const char* folder, std::vector<Vertex>& vertices, std::vector<uint32_t>& indices) {
-	char fname[512];
-	char mname[512];
-	char tname[512];
-	strcpy_s(fname, sizeof(fname), folder);
-	strcat_s(fname, sizeof(fname), "/");
-	strcpy_s(mname, sizeof(mname), folder);
-	strcat_s(mname, sizeof(mname), "/");
-	strcpy_s(tname, sizeof(tname), folder);
-	strcat_s(tname, sizeof(tname), "/");
+void ShapesApp::BuildConstantBuffers() {
+	/*VMBufferInfo passBuffer;
+	passBuffer.size = sizeof(PassConstants);
+	passBuffer.count = gNumFrameResources;
+	passBuffer.isMapped = true;
+	passBuffer.stage = VK_SHADER_STAGE_VERTEX_BIT;
+	passBuffer.type = bUniformDynamic;
+	passConstantHash = mVulkanManager->InitBuffer("PassConstants", passBuffer);
 
-	strcat_s(fname, sizeof(fname), objName);
-	strcat_s(mname, sizeof(mname), objName);
-	strcat_s(tname, sizeof(tname), objName);
-	strcat_s(fname, ".obj");
-	strcat_s(mname, ".mtl");
-	strcat_s(tname, ".jpg");
-	std::ofstream file(fname);
-	file << "# Mesh obj" << std::endl;
-	//file << "mtllib " << objName << ".mtl" << std::endl;
-	//file << "o " << objName << std::endl;
-
-	for (auto& vertex : vertices) {
-		file << "v " << vertex.Pos.x << " " << vertex.Pos.y << " " << vertex.Pos.z << std::endl;
-	}
-	/*for (auto& vertex : vertices) {
-		file << "vn " << vertex.Normal.x << " " << vertex.Normal.y << " " << vertex.Normal.z << std::endl;
-	}
-	for (auto& vertex : vertices) {
-		file << "vt " << vertex.Tex.u << " " << vertex.Tex.v << std::endl;
-	}*/
-	int matidx = 0;
-	/*if (subsets.size() > 0) {
-		std::map<int, std::vector<size_t>> faceSets;
-		for (size_t i = 0; i < subsets.size(); i++) {
-			faceSets[subsets[i]].push_back(i);
-		}
-		for (auto& pair : faceSets) {
-
-			file << "usemtl mat" << matidx++ << std::endl;
-			for (auto& f : pair.second) {
-				size_t i = f * 3;
-				file << "f " << indices[i + 0] + 1 << "/" << indices[i + 0] + 1 << "/" << indices[i + 0] + 1 << " " << indices[i + 1] + 1 << "/" << indices[i + 1] + 1 << "/" << indices[i + 1] + 1 << " " << indices[i + 2] + 1 << "/" << indices[i + 2] + 1 << "/" << indices[i + 2] + 1 << std::endl;
-			}
-
-		}
-	}
-	else*/ {
-		file << "usemtl " << objName << std::endl;
-		for (size_t i = 0; i < indices.size(); i += 3) {
-			file << "f " << indices[i + 0] + 1 << "/" << indices[i + 0] + 1 << "/" << indices[i + 0] + 1 << " " << indices[i + 1] + 1 << "/" << indices[i + 1] + 1 << "/" << indices[i + 1] + 1 << " " << indices[i + 2] + 1 << "/" << indices[i + 2] + 1 << "/" << indices[i + 2] + 1 << std::endl;
-		}
-	}
-
-	std::ofstream mat(mname);
-	/*mat << "#Material Count: " << materials.size() << std::endl << std::endl;
-	matidx = 0;
-	for (auto& m : materials) {
-		mat << "newmtl mat" << matidx++ << std::endl;
-		mat << "Ns " << m.power << std::endl;
-		mat << "Ka " << m.ambient.x << " " << m.ambient.y << " " << m.ambient.z << std::endl;
-		mat << "Kd " << m.diffuse.x << " " << m.diffuse.y << " " << m.diffuse.z << std::endl;
-		mat << "Ks " << m.specular.x << " " << m.specular.y << " " << m.specular.z << std::endl;
-		mat << "Ni 1.45" << std::endl;
-		mat << "d 1.0" << std::endl;
-		mat << "illum 2" << std::endl;
-		if (m.diffuseTex[0]) {
-			mat << "map_Kd " << m.diffuseTex << std::endl;
-		}
-		mat << std::endl;
-	}*/
-	mat << "newmtl " << objName << std::endl;
-	mat << "Ns 323.99994" << std::endl;
-	mat << "Ka 1.000 1.00 1.000" << std::endl;
-	mat << "Kd 0.8 0.8 0.8" << std::endl;
-	mat << "Ks 0.5 0.5 0.5" << std::endl;
-	mat << "Ni 1.45" << std::endl;
-	mat << "d 1.0" << std::endl;
-	mat << "illum 2" << std::endl;
-	//mat << "map_Kd " << objName << ".jpg" << std::endl;
+	VMBufferInfo objectBuffer;
+	objectBuffer.size = sizeof(ObjectConstants);
+	objectBuffer.count = (uint32_t)mAllRItems.size();
+	objectBuffer.isMapped = true;
+	objectBuffer.stage = VK_SHADER_STAGE_VERTEX_BIT;
+	objectBuffer.type = bUniformDynamic;
+	objectConstantHash = mVulkanManager->InitBuffer("ObjectConstants", objectBuffer);*/
 }
 
 void ShapesApp::BuildShapeGeometry() {
@@ -459,24 +470,24 @@ void ShapesApp::BuildShapeGeometry() {
 	//Define the SubmeshGeometry that cover different
 	//regions of the vertex/index buffers.
 	SubmeshGeometry boxSubmesh;
-	boxSubmesh.indexCount = (uint32_t)box.Indices32.size();
-	boxSubmesh.startIndexLocation = boxIndexOffset;
-	boxSubmesh.baseVertexLocation = boxVertexOffset;
+	boxSubmesh.IndexCount = (uint32_t)box.Indices32.size();
+	boxSubmesh.StartIndexLocation = boxIndexOffset;
+	boxSubmesh.BaseVertexLocation = boxVertexOffset;
 
 	SubmeshGeometry gridSubmesh;
-	gridSubmesh.indexCount = (uint32_t)grid.Indices32.size();
-	gridSubmesh.startIndexLocation = gridIndexOffset;
-	gridSubmesh.baseVertexLocation = gridVertexOffset;
+	gridSubmesh.IndexCount = (uint32_t)grid.Indices32.size();
+	gridSubmesh.StartIndexLocation = gridIndexOffset;
+	gridSubmesh.BaseVertexLocation = gridVertexOffset;
 
 	SubmeshGeometry sphereSubmesh;
-	sphereSubmesh.indexCount = (uint32_t)sphere.Indices32.size();
-	sphereSubmesh.startIndexLocation = sphereIndexOffset;
-	sphereSubmesh.baseVertexLocation = sphereVertexOffset;
+	sphereSubmesh.IndexCount = (uint32_t)sphere.Indices32.size();
+	sphereSubmesh.StartIndexLocation = sphereIndexOffset;
+	sphereSubmesh.BaseVertexLocation = sphereVertexOffset;
 
 	SubmeshGeometry cylinderSubmesh;
-	cylinderSubmesh.indexCount = (uint32_t)cylinder.Indices32.size();
-	cylinderSubmesh.startIndexLocation = cylinderIndexOffset;
-	cylinderSubmesh.baseVertexLocation = cylinderVertexOffset;
+	cylinderSubmesh.IndexCount = (uint32_t)cylinder.Indices32.size();
+	cylinderSubmesh.StartIndexLocation = cylinderIndexOffset;
+	cylinderSubmesh.BaseVertexLocation = cylinderVertexOffset;
 
 	//extract the vertex elements we are interested in and pack the
 	//vertices of all the meshes into one vertex buffer.
@@ -535,24 +546,52 @@ void ShapesApp::BuildShapeGeometry() {
 	geo->indexBufferCPU = malloc(ibByteSize);
 	memcpy(geo->indexBufferCPU, indices.data(), ibByteSize);
 
-	initBuffer(mDevice, mMemoryProperties, vbByteSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->vertexBufferGPU);
-	initBuffer(mDevice, mMemoryProperties, ibByteSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->indexBufferGPU);
-
+	//geo->hash = mVulkanManager->InitObjectBuffersWithData("shapeGeo", vbByteSize, vertices.data(), ibByteSize, indices.data());
+	
+	Vulkan::BufferProperties props;
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	props.size = vbByteSize;
+	Vulkan::initBuffer(mDevice, mMemoryProperties, props, VertexBuffer);
+	
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	props.size = ibByteSize;
+	Vulkan::initBuffer(mDevice, mMemoryProperties, props, IndexBuffer);
+	
 	VkDeviceSize maxSize = std::max(vbByteSize, ibByteSize);
-	Buffer stagingBuffer;
-	initBuffer(mDevice, mMemoryProperties, maxSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer);
+	Vulkan::Buffer stagingBuffer;
+	
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+	props.size = maxSize;
+	initBuffer(mDevice, mMemoryProperties, props, stagingBuffer);
 	void* ptr = mapBuffer(mDevice, stagingBuffer);
 	//copy vertex data
 	memcpy(ptr, vertices.data(), vbByteSize);
-	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->vertexBufferGPU, vbByteSize);
+	
+	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, VertexBuffer, vbByteSize);
 	memcpy(ptr, indices.data(), ibByteSize);
-	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->indexBufferGPU, ibByteSize);
+	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, IndexBuffer, ibByteSize);
 	unmapBuffer(mDevice, stagingBuffer);
 	cleanupBuffer(mDevice, stagingBuffer);
+	
 
-	geo->vertexBufferByteSize = vbByteSize;
-	geo->vertexByteStride = sizeof(Vertex);
-	geo->indexBufferByteSize = ibByteSize;
+	geo->VertexBufferByteSize = vbByteSize;
+	geo->VertexByteStride = sizeof(Vertex);
+	geo->IndexBufferByteSize = ibByteSize;
 
 	geo->DrawArgs["box"] = boxSubmesh;
 	geo->DrawArgs["grid"] = gridSubmesh;
@@ -560,35 +599,305 @@ void ShapesApp::BuildShapeGeometry() {
 	geo->DrawArgs["cylinder"] = cylinderSubmesh;
 
 	mGeometries[geo->Name] = std::move(geo);
-	
 
-
-	}
-
-	void ShapesApp::BuildRootSignature() {
-		//build pipeline layout
-		std::vector<VkDescriptorSetLayout> layouts = {
-			mDescriptorSetLayoutPC,
-			mDescriptorSetLayoutOBs
-		};
-		mPipelineLayout = initPipelineLayout(mDevice, layouts);
-	}
+}
 
 void ShapesApp::BuildPSOs() {
-	std::vector<ShaderModule> shaders = {
-		{initShaderModule(mDevice,"shaders/color.vert.spv"),VK_SHADER_STAGE_VERTEX_BIT},
-		{initShaderModule(mDevice,"shaders/color.frag.spv"),VK_SHADER_STAGE_FRAGMENT_BIT}
-	};
-	VkPipeline opaquePipeline = initGraphicsPipeline(mDevice, mRenderPass, mPipelineLayout, shaders, Vertex::getInputBindingDescription(), Vertex::getInputAttributeDescription(), VK_CULL_MODE_FRONT_BIT,true,mMSAA ? mNumSamples : VK_SAMPLE_COUNT_1_BIT,VK_FALSE,VK_POLYGON_MODE_FILL);
-	VkPipeline wireframePipeline = initGraphicsPipeline(mDevice, mRenderPass, mPipelineLayout, shaders, Vertex::getInputBindingDescription(), Vertex::getInputAttributeDescription(), VK_CULL_MODE_FRONT_BIT, true,mMSAA ? mNumSamples :  VK_SAMPLE_COUNT_1_BIT, VK_FALSE, VK_POLYGON_MODE_LINE);
-	
-	mPSOs["opaque"]=opaquePipeline;
-	mPSOs["opaque_wireframe"] = wireframePipeline;
+	//DescriptorSet desSet(mDevice);
+	//std::vector<std::vector<DescriptorInfo>> desInfos ={ { { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT } }, { { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT } }};
+	//desSet.AddDescriptorSet(desInfos,3);
+	// 
+	{
+		//ShaderResources pipelineRes(mDevice, mDeviceProperties, mMemoryProperties);
+		pipelineRes = std::make_unique<ShaderResources>(mDevice, mDeviceProperties, mMemoryProperties);
+
+		std::vector<std::vector<PipelineResource>> pipelineResourceInfos{
+			{
+				{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT, sizeof(PassConstants),1,true},
+			},
+			{
+				{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT,sizeof(ObjectConstants),mAllRItems.size(),true},
+			}
+		};
+		//pipelineRes.AddShaderResources(pipelineResourceInfos, 3);
+		pipelineRes->AddShaderResources(pipelineResourceInfos, 3);
+		//ShaderProgram prog(mDevice);
+		prog = std::make_unique<ShaderProgram>(mDevice);
+		std::vector<const char*> shaderPaths = { "Shaders/color.vert.spv","Shaders/color.frag.spv" };
+		//prog.load(shaderPaths);
+		prog->load(shaderPaths);
+		//PipelineLayout pipelineLayout(mDevice, *pipelineRes);
+		pipelineLayout = std::make_unique<PipelineLayout>(mDevice, *pipelineRes);
+		Vulkan::PipelineInfo pipelineInfo;
+		pipelineInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+		pipelineInfo.polygonMode = VK_POLYGON_MODE_FILL;
+		pipelineInfo.depthTest = VK_TRUE;
+		//Pipeline opaquepipeline(mDevice, mRenderPass, prog, pipelineLayout,pipelineInfo);
+		opaquePipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+		pipelineInfo.polygonMode = VK_POLYGON_MODE_LINE;
+		//Pipeline wireframe(mDevice, mRenderPass, prog, pipelineLayout, pipelineInfo);
+		wireframePipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+	}
+	////Allocte buffers
+	//uint32_t passCount = (uint32_t)gNumFrameResources;
+	////allocate dynamic uniform buffers 
+	//{
+	//	VkDeviceSize alignment = mDeviceProperties.limits.minUniformBufferOffsetAlignment > 0 ? mDeviceProperties.limits.minUniformBufferOffsetAlignment : 256;
+	//	VkDeviceSize passCBSize = sizeof(PassConstants);
+	//	
+	//	passCBSize = (((uint32_t)passCBSize + alignment - 1) & ~(alignment - 1));
+	//	VkDeviceSize passCBTotalSize = passCount * passCBSize;
+
+	//	Vulkan::BufferProperties props{};
+	//	props.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+	//	props.bufferUsage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+	//	props.size = passCBTotalSize;
+
+	//	Vulkan::initBuffer(mDevice, mMemoryProperties, props, PassCBBuffer);
+	//	pPassCB = Vulkan::mapBuffer(mDevice, PassCBBuffer);
+	//	passSize = passCBSize;
+
+	//	passBufferInfo.resize(passCount);
+
+	//	
 
 
-	cleanupShaderModule(mDevice, shaders[0].shaderModule);
-	cleanupShaderModule(mDevice, shaders[1].shaderModule);
+
+	//	VkDeviceSize objectCBSize = sizeof(ObjectConstants);
+	//	
+	//	objectCBSize = (((uint32_t)objectCBSize + alignment - 1) & ~(alignment - 1));
+	//	objectSize = objectCBSize;
+	//	objectCBSize *= (uint32_t)mAllRItems.size();
+	//	VkDeviceSize objectCBTotalSize = passCount * objectCBSize;
+
+	//	props.size = objectCBTotalSize;
+	//	Vulkan::initBuffer(mDevice, mMemoryProperties, props, ObjectCBBuffer);
+	//	pObjectCB = Vulkan::mapBuffer(mDevice, ObjectCBBuffer);
+	//	
+
+	//	objectBufferInfo.resize(passCount);
+
+	//	for (uint32_t i = 0; i < passCount; i++) {
+	//		passBufferInfo[i].buffer = PassCBBuffer.buffer;
+	//		passBufferInfo[i].offset = passCBSize * i;
+	//		passBufferInfo[i].range = passSize;
+
+	//		objectBufferInfo[i].buffer = ObjectCBBuffer.buffer;
+	//		objectBufferInfo[i].offset = objectCBSize * i;
+	//		objectBufferInfo[i].range = objectSize;
+	//	}
+
+	//	
+
+	//}
+	//{
+	//	//build descriptor
+	//	//need pool to allocate passCount * 2 descriptor sets
+	//	std::vector<VkDescriptorPoolSize> poolSizes = {
+	//		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, passCount*2}
+	//	};
+	//	descriptorPool = Vulkan::initDescriptorPool(mDevice, poolSizes, passCount*2);
+	//	//need 2 descriptor layouts
+	//	{
+	//		std::vector<VkDescriptorSetLayoutBinding> descriptorBindings{
+	//			{0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,1,passStage}
+	//		};
+	//		descriptorSetLayouts.push_back(Vulkan::initDescriptorSetLayout(mDevice, descriptorBindings));
+	//	}
+	//	{
+	//		std::vector<VkDescriptorSetLayoutBinding> descriptorBindings{
+	//		{0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,1,objectStage}
+	//		};
+	//		descriptorSetLayouts.push_back(Vulkan::initDescriptorSetLayout(mDevice, descriptorBindings));
+	//	}
+	//	//need passCount * 2 descriptorSets
+	//	descriptorSets.resize(2);
+	//	for (size_t i = 0; i < 2; i++) {
+	//		descriptorSets[i].resize(passCount);
+	//		for (size_t j = 0; j < passCount; j++) {
+	//			descriptorSets[i][j]=Vulkan::initDescriptorSet(mDevice, descriptorSetLayouts[i], descriptorPool);
+
+	//		}
+	//	}
+
+	//	//update descriptors with buffer info
+	//	for (uint32_t i = 0; i < passCount; ++i) {
+	//		std::vector<VkWriteDescriptorSet> descriptorWrites = {
+	//			{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,descriptorSets[0][i],0,0,1,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,nullptr,&passBufferInfo[i],nullptr},
+	//			{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,descriptorSets[1][i],0,0,1,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,nullptr,&objectBufferInfo[i],nullptr}
+	//		};
+	//		
+	//		Vulkan::updateDescriptorSets(mDevice, descriptorWrites);
+	//	}
+	//}
+
+	//{
+	//	//build pipeline objects 
+	//	VkVertexInputBindingDescription vertexInputDescription;
+	//	std::vector<VkVertexInputAttributeDescription> vertexAttributeDescriptions;
+	//	std::unordered_map<VkShaderStageFlagBits, VkShaderModule> shaders;
+	//	//std::vector<VkShaderModule> shaders;
+	//	std::vector<const char*> shaderPaths = { "Shaders/color.vert.spv","Shaders/color.frag.spv" };
+	//	for (auto path : shaderPaths) {
+	//		std::ifstream file(path, std::ios::ate | std::ios::binary);
+	//		assert(file.is_open());
+
+
+	//		size_t fileSize = (size_t)file.tellg();
+	//		std::vector<char> shaderData(fileSize);
+
+	//		file.seekg(0);
+	//		file.read(shaderData.data(), fileSize);
+
+	//		file.close();
+	//		SpvReflectShaderModule module = {};
+	//		SpvReflectResult result = spvReflectCreateShaderModule(shaderData.size(), shaderData.data(), &module);
+	//		assert(result == SPV_REFLECT_RESULT_SUCCESS);
+
+
+	//		VkShaderStageFlagBits stage;
+	//		switch (module.shader_stage) {
+	//		case SpvReflectShaderStageFlagBits::SPV_REFLECT_SHADER_STAGE_VERTEX_BIT:
+	//			stage = VK_SHADER_STAGE_VERTEX_BIT;
+	//			break;
+	//		case SpvReflectShaderStageFlagBits::SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT:
+	//			stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+	//			break;
+	//		case SpvReflectShaderStageFlagBits::SPV_REFLECT_SHADER_STAGE_GEOMETRY_BIT:
+	//			stage = VK_SHADER_STAGE_GEOMETRY_BIT;
+	//			break;
+	//		case SpvReflectShaderStageFlagBits::SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT:
+	//			stage = VK_SHADER_STAGE_COMPUTE_BIT;
+	//			break;
+	//		default:
+	//			assert(0);
+	//			break;
+	//		}
+
+	//		if (stage == VK_SHADER_STAGE_VERTEX_BIT) {
+
+	//			vertexAttributeDescriptions.resize(module.input_variable_count);
+
+	//			uint32_t offset = 0;
+	//			std::vector<uint32_t> sizes(module.input_variable_count);
+	//			std::vector<VkFormat> formats(module.input_variable_count);
+	//			for (uint32_t i = 0; i < module.input_variable_count; ++i) {
+	//				SpvReflectInterfaceVariable& inputVar = module.input_variables[i];
+	//				uint32_t size = 0;
+	//				VkFormat format;
+	//				switch (inputVar.format) {
+
+	//				case SPV_REFLECT_FORMAT_R32G32B32A32_SFLOAT:
+	//					format = VK_FORMAT_R32G32B32A32_SFLOAT;
+	//					size = sizeof(float) * 4;
+	//					break;
+	//				case SPV_REFLECT_FORMAT_R32G32B32_SFLOAT:
+	//					format = VK_FORMAT_R32G32B32_SFLOAT;
+	//					size = sizeof(float) * 3;
+	//					break;
+	//				case SPV_REFLECT_FORMAT_R32G32_SFLOAT:
+	//					format = VK_FORMAT_R32G32_SFLOAT;
+	//					size = sizeof(float) * 2;
+	//					break;
+	//				default:
+	//					assert(0);
+	//					break;
+	//				}
+	//				sizes[inputVar.location] = (uint32_t)size;
+	//				formats[inputVar.location] = format;
+	//			}
+
+	//			for (uint32_t i = 0; i < module.input_variable_count; i++) {
+
+	//				vertexAttributeDescriptions[i].location = i;
+	//				vertexAttributeDescriptions[i].offset = offset;
+	//				vertexAttributeDescriptions[i].format = formats[i];
+	//				offset += sizes[i];
+	//			}
+	//			vertexInputDescription.binding = 0;
+	//			vertexInputDescription.stride = offset;
+	//			vertexInputDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+	//		}
+	//		spvReflectDestroyShaderModule(&module);
+	//		VkShaderModule shader = VK_NULL_HANDLE;
+
+	//		VkShaderModuleCreateInfo createInfo{ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+	//		createInfo.codeSize = shaderData.size();
+	//		createInfo.pCode = reinterpret_cast<const uint32_t*>(shaderData.data());
+	//		VkResult res = vkCreateShaderModule(mDevice, &createInfo, nullptr, &shader);
+	//		assert(res == VK_SUCCESS);
+	//		shaders.insert(std::pair<VkShaderStageFlagBits, VkShaderModule>(stage, shader));
+	//		//shaders.push_back(shader);
+	//		shaderData.clear();
+	//	}
+	//	
+	//	pipelineLayout = Vulkan::initPipelineLayout(mDevice, descriptorSetLayouts);
+
+	//	Vulkan::PipelineInfo pipelineInfo;
+	//	pipelineInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+	//	pipelineInfo.polygonMode = VK_POLYGON_MODE_FILL;
+	//	pipelineInfo.depthTest = VK_TRUE;
+
+	//	std::vector<Vulkan::ShaderModule> shaderModules;
+	//	for (auto& shader : shaders) {
+	//		Vulkan::ShaderModule shaderModule;
+	//		shaderModule.stage = shader.first;
+	//		shaderModule.shaderModule = shader.second;
+	//		shaderModules.push_back(shaderModule);
+	//	}
+	//	
+	//	opaquePipeline = Vulkan::initGraphicsPipeline(mDevice, mRenderPass, pipelineLayout, shaderModules, vertexInputDescription, vertexAttributeDescriptions, pipelineInfo);
+
+	//	pipelineInfo.polygonMode = VK_POLYGON_MODE_LINE;
+	//	wireframePipeline = Vulkan::initGraphicsPipeline(mDevice, mRenderPass, pipelineLayout, shaderModules, vertexInputDescription, vertexAttributeDescriptions, pipelineInfo);
+
+	//	for (auto& shaderPair : shaders) {
+	//		vkDestroyShaderModule(mDevice, shaderPair.second,nullptr);
+	//	
+	//	}
+	//}
+
+	//{
+	//	VMDrawObjectInfo doi;
+	//	doi.shaderPaths = { "Shaders/color.vert.spv","Shaders/color.frag.spv" };
+	//	doi.passCount = gNumFrameResources;
+	//	doi.polygonMode = VK_POLYGON_MODE_FILL;
+	//	doi.cullMode = VK_CULL_MODE_FRONT_BIT;
+	//	
+	//	//doi.bufferHashes = { passConstantHash,objectConstantHash };
+	//	//doi.descriptorTypes = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC };
+	//	doi.descriptorSets = {
+	//		{
+	//			{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,passConstantHash}
+	//		},
+	//		{
+	//				{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,objectConstantHash}
+	//		}
+	//	};
+	//	mPSOs["opaque"] = mVulkanManager->InitDrawObject("opaque", doi, mRenderPass);
+	//}
+	//{
+	//	VMDrawObjectInfo doi;
+	//	doi.shaderPaths = { "Shaders/color.vert.spv","Shaders/color.frag.spv" };
+	//	doi.passCount = gNumFrameResources;
+	//	doi.polygonMode = VK_POLYGON_MODE_LINE;
+	//	doi.cullMode = VK_CULL_MODE_FRONT_BIT;
+	//	//doi.bufferHashes = { passConstantHash,objectConstantHash };
+	//	//doi.descriptorTypes = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC };
+	//	doi.descriptorSets = {
+	//		{
+	//			{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,passConstantHash}
+	//		},
+	//		{
+	//				{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,objectConstantHash}
+	//		}
+	//	};
+	//	mPSOs["wireframe"] = mVulkanManager->InitDrawObject("wireframe", doi, mRenderPass);
+	//}
+
 }
+
 
 void ShapesApp::BuildRenderItems() {
 	auto boxRitem = std::make_unique<RenderItem>();
@@ -596,9 +905,9 @@ void ShapesApp::BuildRenderItems() {
 	boxRitem->ObjCBIndex = 0;
 	boxRitem->Geo = mGeometries["shapeGeo"].get();
 	boxRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-	boxRitem->indexCount = boxRitem->Geo->DrawArgs["box"].indexCount;
-	boxRitem->startIndexLocation = boxRitem->Geo->DrawArgs["box"].startIndexLocation;
-	boxRitem->BaseVertexLocation = boxRitem->Geo->DrawArgs["box"].baseVertexLocation;
+	boxRitem->IndexCount = boxRitem->Geo->DrawArgs["box"].IndexCount;
+	boxRitem->StartIndexLocation = boxRitem->Geo->DrawArgs["box"].StartIndexLocation;
+	boxRitem->BaseVertexLocation = boxRitem->Geo->DrawArgs["box"].BaseVertexLocation;
 	mAllRItems.push_back(std::move(boxRitem));
 
 	auto gridRitem = std::make_unique<RenderItem>();
@@ -606,9 +915,9 @@ void ShapesApp::BuildRenderItems() {
 	gridRitem->ObjCBIndex = 1;
 	gridRitem->Geo = mGeometries["shapeGeo"].get();
 	gridRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-	gridRitem->indexCount = gridRitem->Geo->DrawArgs["grid"].indexCount;
-	gridRitem->startIndexLocation = gridRitem->Geo->DrawArgs["grid"].startIndexLocation;
-	gridRitem->BaseVertexLocation = gridRitem->Geo->DrawArgs["grid"].baseVertexLocation;
+	gridRitem->IndexCount = gridRitem->Geo->DrawArgs["grid"].IndexCount;
+	gridRitem->StartIndexLocation = gridRitem->Geo->DrawArgs["grid"].StartIndexLocation;
+	gridRitem->BaseVertexLocation = gridRitem->Geo->DrawArgs["grid"].BaseVertexLocation;
 	mAllRItems.push_back(std::move(gridRitem));
 
 	uint32_t objCBIndex = 2;
@@ -629,33 +938,33 @@ void ShapesApp::BuildRenderItems() {
 		leftCylRitem->ObjCBIndex = objCBIndex++;
 		leftCylRitem->Geo = mGeometries["shapeGeo"].get();
 		leftCylRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-		leftCylRitem->indexCount = leftCylRitem->Geo->DrawArgs["cylinder"].indexCount;
-		leftCylRitem->startIndexLocation = leftCylRitem->Geo->DrawArgs["cylinder"].startIndexLocation;
-		leftCylRitem->BaseVertexLocation = leftCylRitem->Geo->DrawArgs["cylinder"].baseVertexLocation;
+		leftCylRitem->IndexCount = leftCylRitem->Geo->DrawArgs["cylinder"].IndexCount;
+		leftCylRitem->StartIndexLocation = leftCylRitem->Geo->DrawArgs["cylinder"].StartIndexLocation;
+		leftCylRitem->BaseVertexLocation = leftCylRitem->Geo->DrawArgs["cylinder"].BaseVertexLocation;
 
 		rightCylRitem->World = leftCylWorld;
 		rightCylRitem->ObjCBIndex = objCBIndex++;
 		rightCylRitem->Geo = mGeometries["shapeGeo"].get();
 		rightCylRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-		rightCylRitem->indexCount = rightCylRitem->Geo->DrawArgs["cylinder"].indexCount;
-		rightCylRitem->startIndexLocation = rightCylRitem->Geo->DrawArgs["cylinder"].startIndexLocation;
-		rightCylRitem->BaseVertexLocation = rightCylRitem->Geo->DrawArgs["cylinder"].baseVertexLocation;
+		rightCylRitem->IndexCount = rightCylRitem->Geo->DrawArgs["cylinder"].IndexCount;
+		rightCylRitem->StartIndexLocation = rightCylRitem->Geo->DrawArgs["cylinder"].StartIndexLocation;
+		rightCylRitem->BaseVertexLocation = rightCylRitem->Geo->DrawArgs["cylinder"].BaseVertexLocation;
 
 		leftSphereRitem->World = leftSphereWorld;
 		leftSphereRitem->ObjCBIndex = objCBIndex++;
 		leftSphereRitem->Geo = mGeometries["shapeGeo"].get();
 		leftSphereRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-		leftSphereRitem->indexCount = leftSphereRitem->Geo->DrawArgs["sphere"].indexCount;
-		leftSphereRitem->startIndexLocation = leftSphereRitem->Geo->DrawArgs["sphere"].startIndexLocation;
-		leftSphereRitem->BaseVertexLocation = leftSphereRitem->Geo->DrawArgs["sphere"].baseVertexLocation;
+		leftSphereRitem->IndexCount = leftSphereRitem->Geo->DrawArgs["sphere"].IndexCount;
+		leftSphereRitem->StartIndexLocation = leftSphereRitem->Geo->DrawArgs["sphere"].StartIndexLocation;
+		leftSphereRitem->BaseVertexLocation = leftSphereRitem->Geo->DrawArgs["sphere"].BaseVertexLocation;
 
 		rightSphereRitem->World = rightSphereWorld;
 		rightSphereRitem->ObjCBIndex = objCBIndex++;
 		rightSphereRitem->Geo = mGeometries["shapeGeo"].get();
 		rightSphereRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-		rightSphereRitem->indexCount = rightSphereRitem->Geo->DrawArgs["sphere"].indexCount;
-		rightSphereRitem->startIndexLocation = rightSphereRitem->Geo->DrawArgs["sphere"].startIndexLocation;
-		rightSphereRitem->BaseVertexLocation = rightSphereRitem->Geo->DrawArgs["sphere"].baseVertexLocation;
+		rightSphereRitem->IndexCount = rightSphereRitem->Geo->DrawArgs["sphere"].IndexCount;
+		rightSphereRitem->StartIndexLocation = rightSphereRitem->Geo->DrawArgs["sphere"].StartIndexLocation;
+		rightSphereRitem->BaseVertexLocation = rightSphereRitem->Geo->DrawArgs["sphere"].BaseVertexLocation;
 
 		mAllRItems.push_back(std::move(leftCylRitem));
 		mAllRItems.push_back(std::move(rightCylRitem));
@@ -668,11 +977,6 @@ void ShapesApp::BuildRenderItems() {
 	for (auto& e : mAllRItems) {
 		mOpaqueRitems.push_back(e.get());
 	}
-}
-
-void ShapesApp::BuildConstantBuffers() {
-	
-
 }
 
 int main() {

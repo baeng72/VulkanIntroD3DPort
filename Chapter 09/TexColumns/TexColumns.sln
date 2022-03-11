@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 16
 VisualStudioVersion = 16.0.31205.134
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TexColumns", "TexColumns\TexColumns.vcxproj", "{1F104E93-45C2-4AA2-96C6-1DC7018E7C4A}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TexColumns", "TexColumns\TexColumns.vcxproj", "{D0F10F2F-1B9C-4290-8E95-6C527A3A20AE}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -13,19 +13,19 @@ Global
 		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{1F104E93-45C2-4AA2-96C6-1DC7018E7C4A}.Debug|x64.ActiveCfg = Debug|x64
-		{1F104E93-45C2-4AA2-96C6-1DC7018E7C4A}.Debug|x64.Build.0 = Debug|x64
-		{1F104E93-45C2-4AA2-96C6-1DC7018E7C4A}.Debug|x86.ActiveCfg = Debug|Win32
-		{1F104E93-45C2-4AA2-96C6-1DC7018E7C4A}.Debug|x86.Build.0 = Debug|Win32
-		{1F104E93-45C2-4AA2-96C6-1DC7018E7C4A}.Release|x64.ActiveCfg = Release|x64
-		{1F104E93-45C2-4AA2-96C6-1DC7018E7C4A}.Release|x64.Build.0 = Release|x64
-		{1F104E93-45C2-4AA2-96C6-1DC7018E7C4A}.Release|x86.ActiveCfg = Release|Win32
-		{1F104E93-45C2-4AA2-96C6-1DC7018E7C4A}.Release|x86.Build.0 = Release|Win32
+		{D0F10F2F-1B9C-4290-8E95-6C527A3A20AE}.Debug|x64.ActiveCfg = Debug|x64
+		{D0F10F2F-1B9C-4290-8E95-6C527A3A20AE}.Debug|x64.Build.0 = Debug|x64
+		{D0F10F2F-1B9C-4290-8E95-6C527A3A20AE}.Debug|x86.ActiveCfg = Debug|Win32
+		{D0F10F2F-1B9C-4290-8E95-6C527A3A20AE}.Debug|x86.Build.0 = Debug|Win32
+		{D0F10F2F-1B9C-4290-8E95-6C527A3A20AE}.Release|x64.ActiveCfg = Release|x64
+		{D0F10F2F-1B9C-4290-8E95-6C527A3A20AE}.Release|x64.Build.0 = Release|x64
+		{D0F10F2F-1B9C-4290-8E95-6C527A3A20AE}.Release|x86.ActiveCfg = Release|Win32
+		{D0F10F2F-1B9C-4290-8E95-6C527A3A20AE}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {41349234-73BE-44DB-8BF6-84829AC49D55}
+		SolutionGuid = {71C678E1-92C6-4568-A3D8-E33864C14CC0}
 	EndGlobalSection
 EndGlobal

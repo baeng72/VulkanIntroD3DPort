@@ -6,10 +6,17 @@
 #include <exception>
 #include <cassert>
 #include <string>
+#ifdef __USE__THREAD__
+#include <memory>
+#include <future>
+#endif
+#define NOMINMAX //we want std::max, not windows version
 #include <windows.h>
 #include <windowsx.h>
 #include "Vulkan.h"
 #include "GameTimer.h"
+
+
 
 class VulkApp
 {
@@ -21,7 +28,7 @@ protected:
     virtual ~VulkApp();
 
     virtual void OnResize();
-    virtual void Update(const GameTimer& gt) = 0;
+    virtual void Update(const GameTimer& gt);
     virtual void Draw(const GameTimer& gt) = 0;
 
     // Convenience overrides for handling mouse input.
@@ -50,10 +57,13 @@ protected:
     bool        mDepthBuffer{ true };
     bool        mMSAA{ true };
     bool    mAllowWireframe{ false };
-     // Used to keep track of the “delta-time” and game time (§4.4).
+
+
+    // Used to keep track of the “delta-time” and game time (§4.4).
     GameTimer mTimer;
 
     std::wstring mMainWndCaption = L"Vulk App";
+
 
     int mClientWidth = 800;
     int mClientHeight = 600;
@@ -61,10 +71,13 @@ protected:
     VkInstance                          mInstance{ VK_NULL_HANDLE };
     VkSurfaceKHR                        mSurface{ VK_NULL_HANDLE };
     VkPhysicalDevice                    mPhysicalDevice{ VK_NULL_HANDLE };
-    Queues                              mQueues;
+    Vulkan::Queues                              mQueues;
     VkQueue                             mGraphicsQueue{ VK_NULL_HANDLE };
     VkQueue                             mPresentQueue{ VK_NULL_HANDLE };
     VkQueue                             mComputeQueue{ VK_NULL_HANDLE };
+
+    VkQueue                             mBackQueue{ VK_NULL_HANDLE };
+
     VkPhysicalDeviceProperties          mDeviceProperties;
     VkPhysicalDeviceMemoryProperties    mMemoryProperties;
     VkPhysicalDeviceFeatures            mDeviceFeatures;
@@ -80,16 +93,21 @@ protected:
     VkSwapchainKHR                      mSwapchain{ VK_NULL_HANDLE };
     std::vector<VkImage>                mSwapchainImages;
     std::vector<VkImageView>            mSwapchainImageViews;
-    VkSemaphore                         mPresentComplete{ VK_NULL_HANDLE };
-    VkSemaphore                         mRenderComplete{ VK_NULL_HANDLE };
+    std::vector<VkSemaphore>            mPresentCompletes;
+    //VkSemaphore                         mPresentComplete{ VK_NULL_HANDLE };
+    std::vector<VkSemaphore>            mRenderCompletes;
+    std::vector<VkFence>                mFences;
+    VkFence                             mCurrFence{ VK_NULL_HANDLE };
+    //VkSemaphore                         mRenderComplete{ VK_NULL_HANDLE };
     VkCommandPool                       mCommandPool{ VK_NULL_HANDLE };
     VkCommandBuffer                     mCommandBuffer{ VK_NULL_HANDLE };
     std::vector<VkCommandPool>          mCommandPools;
     std::vector<VkCommandBuffer>        mCommandBuffers;
     VkFormat                            mDepthFormat = VK_FORMAT_D32_SFLOAT;
+    VkImageUsageFlags                   mDepthImageUsage = 0;
     VkRenderPass                        mRenderPass{ VK_NULL_HANDLE };
-    Image                               mDepthImage;
-    Image                               mMsaaImage;
+    Vulkan::Image                               mDepthImage;
+    Vulkan::Image                               mMsaaImage;
     std::vector<VkFramebuffer>          mFramebuffers;
     PFN_vkAcquireNextImageKHR pvkAcquireNextImage{ nullptr };
     PFN_vkQueuePresentKHR pvkQueuePresent{ nullptr };
@@ -117,9 +135,10 @@ protected:
     VkPresentInfoKHR                    mPresentInfo{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
     uint32_t                            mIndex = 0;
     uint32_t                            mFrameCount = 0;
-
-    VkCommandBuffer BeginRender();
-    void            EndRender(VkCommandBuffer cmd,VkFence fence=VK_NULL_HANDLE);
+    uint32_t                            mCurrFrame{ (uint32_t)(-1) };
+    uint32_t                            mMaxFrames{ 0 };
+    VkCommandBuffer BeginRender(bool startRenderPass=true);
+    void            EndRender(VkCommandBuffer cmd);
 public:
     static VulkApp* GetApp();
 

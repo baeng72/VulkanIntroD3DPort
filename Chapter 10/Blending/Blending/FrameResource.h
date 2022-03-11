@@ -49,24 +49,13 @@ struct Vertex {
 	}
 };
 
-
 struct FrameResource {
-	FrameResource(VkDevice device, VkPhysicalDeviceMemoryProperties memoryProperties, std::vector<VkDescriptorSet>& descriptorSets, uint32_t minAlignmentSize, uint32_t passCount, uint32_t objectCount, uint32_t materialCount, uint32_t waveVertCount);
+	FrameResource(PassConstants* pc, ObjectConstants* oc, MaterialConstants* mc, Vertex* pWvs);
 	FrameResource(const FrameResource& rhs) = delete;
 	FrameResource& operator=(const FrameResource& rhs) = delete;
 	~FrameResource();
-
-	VkDevice device{ VK_NULL_HANDLE };
-	VkFence Fence{ VK_NULL_HANDLE };
-	Buffer PassCB;
-	Buffer ObjectCB;
-	Buffer MaterialCB;
-	Buffer WavesVB;
-
 	PassConstants* pPCs{ nullptr };
 	ObjectConstants* pOCs{ nullptr };
 	MaterialConstants* pMats{ nullptr };
 	Vertex* pWavesVB{ nullptr };
-
-
 };

@@ -1,17 +1,20 @@
 #include "../../../Common/VulkApp.h"
-#include "../../../Common/VulkUtil.h"
-#include "../../../Common/GeometryGenerator.h"
+#include "../../Common/VulkUtil.h"
 #include "../../../Common/MathHelper.h"
 #include "../../../Common/Colors.h"
+#include "../../../Common/GeometryGenerator.h"
 #include "../../../Common/TextureLoader.h"
 #include "FrameResource.h"
 
 
 #include <memory>
+
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+
+#include "ShaderProgram.h"
 
 const int gNumFrameResources = 3;
 
@@ -38,25 +41,16 @@ struct RenderItem {
 	uint32_t BaseVertexLocation{ 0 };
 };
 
-
-const float pi = 3.14159265358979323846264338327950288f;
-
 class TexColumnsApp : public VulkApp {
 	std::vector<std::unique_ptr<FrameResource>> mFrameResources;
 	FrameResource* mCurrFrameResource = nullptr;
 	int mCurrFrameResourceIndex = 0;
 
-	VkDescriptorSetLayout	mDescriptorSetLayoutPC{ VK_NULL_HANDLE };
-	VkDescriptorSetLayout	mDescriptorSetLayoutOBs{ VK_NULL_HANDLE };
-	VkDescriptorSetLayout  mDescriptorSetLayoutMats{ VK_NULL_HANDLE };
-	VkDescriptorSetLayout mDescriptorSetLayoutTextures{ VK_NULL_HANDLE };
-	VkDescriptorPool		mDescriptorPool{ VK_NULL_HANDLE };
-	VkDescriptorPool		mDescriptorPoolTexture{ VK_NULL_HANDLE };
-	std::vector<VkDescriptorSet> mDescriptorSetsPC;
-	std::vector<VkDescriptorSet> mDescriptorSetsOBs;
-	std::vector<VkDescriptorSet> mDescriptorSetsMats;
-	std::vector<VkDescriptorSet> mDescriptorSetsTextures;
-	VkPipelineLayout		mPipelineLayout{ VK_NULL_HANDLE };
+	std::unique_ptr<ShaderResources> pipelineRes;
+	std::unique_ptr<ShaderProgram> prog;
+	std::unique_ptr<PipelineLayout> pipelineLayout;
+	std::unique_ptr<Pipeline> opaquePipeline;
+	std::unique_ptr<Pipeline> wireframePipeline;
 
 	std::unordered_map<std::string, std::unique_ptr<MeshGeometry>> mGeometries;
 	std::unordered_map < std::string, std::unique_ptr<Material>> mMaterials;
@@ -98,17 +92,12 @@ class TexColumnsApp : public VulkApp {
 	void UpdateMaterialsCBs(const GameTimer& gt);
 
 	void LoadTextures();
-	void BuildRootSignature();
-	void BuildDescriptorHeaps();
-	//void BuildConstantBuffers();
 	void BuildShapeGeometry();
 	void BuildPSOs();
 	void BuildFrameResources();
 	void BuildMaterials();
 	void BuildRenderItems();
 	void DrawRenderItems(VkCommandBuffer cmd, const std::vector<RenderItem*>& ritems);
-
-
 public:
 	TexColumnsApp(HINSTANCE hInstance);
 	TexColumnsApp(const TexColumnsApp& rhs) = delete;
@@ -116,8 +105,6 @@ public:
 	~TexColumnsApp();
 
 	virtual bool Initialize()override;
-
-
 };
 
 TexColumnsApp::TexColumnsApp(HINSTANCE hInstance) :VulkApp(hInstance) {
@@ -138,104 +125,26 @@ TexColumnsApp::~TexColumnsApp() {
 		cleanupBuffer(mDevice, pair.second->indexBufferGPU);
 
 	}
-	for (auto& pair : mPSOs) {
-		VkPipeline pipeline = pair.second;
-		cleanupPipeline(mDevice, pipeline);
-	}
-	for (auto& pair : mTextures) {
+	/*for (auto& pair : mTextures) {
 		cleanupImage(mDevice, *pair.second);
-	}
-	cleanupPipelineLayout(mDevice, mPipelineLayout);
-	cleanupDescriptorPool(mDevice, mDescriptorPoolTexture);
-	cleanupDescriptorPool(mDevice, mDescriptorPool);
-	cleanupDescriptorSetLayout(mDevice, mDescriptorSetLayoutTextures);
-	cleanupDescriptorSetLayout(mDevice, mDescriptorSetLayoutMats);
-	cleanupDescriptorSetLayout(mDevice, mDescriptorSetLayoutOBs);
-	cleanupDescriptorSetLayout(mDevice, mDescriptorSetLayoutPC);
+	}*/
 }
 
 bool TexColumnsApp::Initialize() {
 	if (!VulkApp::Initialize())
 		return false;
-	
+
 	LoadTextures();
-	BuildDescriptorHeaps();
+	
 	BuildShapeGeometry();
 	BuildMaterials();
 	BuildRenderItems();
-	BuildRootSignature();
-	BuildFrameResources();
 
 	BuildPSOs();
+	BuildFrameResources();
+
+	
 	return true;
-}
-
-void TexColumnsApp::BuildDescriptorHeaps() {
-	std::vector<VkDescriptorSetLayoutBinding> bindings = {
-		{0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,1,VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,nullptr}, //Binding 0, uniform (constant) buffer
-
-	};
-	mDescriptorSetLayoutPC = initDescriptorSetLayout(mDevice, bindings);
-	mDescriptorSetLayoutOBs = initDescriptorSetLayout(mDevice, bindings);
-	mDescriptorSetLayoutMats = initDescriptorSetLayout(mDevice, bindings);
-
-	std::vector<VkDescriptorPoolSize> poolSizes{
-		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,9},
-	};
-	mDescriptorPool = initDescriptorPool(mDevice, poolSizes, 9);
-	uint32_t count = getSwapchainImageCount(mSurfaceCaps);
-	mDescriptorSetsPC.resize(count);
-	initDescriptorSets(mDevice, mDescriptorSetLayoutPC, mDescriptorPool, mDescriptorSetsPC.data(), count);
-	mDescriptorSetsOBs.resize(count);
-	initDescriptorSets(mDevice, mDescriptorSetLayoutOBs, mDescriptorPool, mDescriptorSetsOBs.data(), count);
-	mDescriptorSetsMats.resize(count);
-	initDescriptorSets(mDevice, mDescriptorSetLayoutOBs, mDescriptorPool, mDescriptorSetsMats.data(), count);
-
-	bindings = {
-		{0,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT,nullptr}
-	};
-	
-	mDescriptorSetLayoutTextures = initDescriptorSetLayout(mDevice, bindings);
-	poolSizes = {
-		{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,count},
-	};
-	mDescriptorPoolTexture = initDescriptorPool(mDevice, poolSizes, count+1);
-		mDescriptorSetsTextures.resize(count);
-	initDescriptorSets(mDevice, mDescriptorSetLayoutTextures, mDescriptorPoolTexture, mDescriptorSetsTextures.data(), count);
-	
-	
-	std::vector<VkDescriptorImageInfo> imageInfos(count);
-	
-	std::vector<VkWriteDescriptorSet> descriptorWrites;
-	Texture* tex{ nullptr };
-	for (uint32_t i = 0; i < count; i++) {
-		imageInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		switch (i) {
-		case 0:
-			tex = mTextures["bricksTex"].get();
-			break;
-		case 1:
-			tex = mTextures["stoneTex"].get();
-			break;
-		case 2:
-			tex = mTextures["tileTex"].get();
-			break;
-		}
-		if (tex != nullptr) {
-			imageInfos[i].imageView = tex->imageView;
-			imageInfos[i].sampler = tex->sampler;
-
-			descriptorWrites.push_back(
-				{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,mDescriptorSetsTextures[i],0,0,1,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&imageInfos[i],nullptr,nullptr });
-
-		}
-		
-		
-	}
-	updateDescriptorSets(mDevice, descriptorWrites);
-
-
-
 }
 
 void TexColumnsApp::BuildShapeGeometry() {
@@ -262,24 +171,24 @@ void TexColumnsApp::BuildShapeGeometry() {
 	//Define the SubmeshGeometry that cover different
 	//regions of the vertex/index buffers.
 	SubmeshGeometry boxSubmesh;
-	boxSubmesh.indexCount = (uint32_t)box.Indices32.size();
-	boxSubmesh.startIndexLocation = boxIndexOffset;
-	boxSubmesh.baseVertexLocation = boxVertexOffset;
+	boxSubmesh.IndexCount = (uint32_t)box.Indices32.size();
+	boxSubmesh.StartIndexLocation = boxIndexOffset;
+	boxSubmesh.BaseVertexLocation = boxVertexOffset;
 
 	SubmeshGeometry gridSubmesh;
-	gridSubmesh.indexCount = (uint32_t)grid.Indices32.size();
-	gridSubmesh.startIndexLocation = gridIndexOffset;
-	gridSubmesh.baseVertexLocation = gridVertexOffset;
+	gridSubmesh.IndexCount = (uint32_t)grid.Indices32.size();
+	gridSubmesh.StartIndexLocation = gridIndexOffset;
+	gridSubmesh.BaseVertexLocation = gridVertexOffset;
 
 	SubmeshGeometry sphereSubmesh;
-	sphereSubmesh.indexCount = (uint32_t)sphere.Indices32.size();
-	sphereSubmesh.startIndexLocation = sphereIndexOffset;
-	sphereSubmesh.baseVertexLocation = sphereVertexOffset;
+	sphereSubmesh.IndexCount = (uint32_t)sphere.Indices32.size();
+	sphereSubmesh.StartIndexLocation = sphereIndexOffset;
+	sphereSubmesh.BaseVertexLocation = sphereVertexOffset;
 
 	SubmeshGeometry cylinderSubmesh;
-	cylinderSubmesh.indexCount = (uint32_t)cylinder.Indices32.size();
-	cylinderSubmesh.startIndexLocation = cylinderIndexOffset;
-	cylinderSubmesh.baseVertexLocation = cylinderVertexOffset;
+	cylinderSubmesh.IndexCount = (uint32_t)cylinder.Indices32.size();
+	cylinderSubmesh.StartIndexLocation = cylinderIndexOffset;
+	cylinderSubmesh.BaseVertexLocation = cylinderVertexOffset;
 
 	//extract the vertex elements we are interested in and pack the
 	//vertices of all the meshes into one vertex buffer.
@@ -342,24 +251,64 @@ void TexColumnsApp::BuildShapeGeometry() {
 	geo->indexBufferCPU = malloc(ibByteSize);
 	memcpy(geo->indexBufferCPU, indices.data(), ibByteSize);
 
-	initBuffer(mDevice, mMemoryProperties, vbByteSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->vertexBufferGPU);
-	initBuffer(mDevice, mMemoryProperties, ibByteSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->indexBufferGPU);
+	Vulkan::BufferProperties props;
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	props.size = vbByteSize;
+	Vulkan::initBuffer(mDevice, mMemoryProperties, props, geo->vertexBufferGPU);
+
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	props.size = ibByteSize;
+	Vulkan::initBuffer(mDevice, mMemoryProperties, props, geo->indexBufferGPU);
 
 	VkDeviceSize maxSize = std::max(vbByteSize, ibByteSize);
-	Buffer stagingBuffer;
-	initBuffer(mDevice, mMemoryProperties, maxSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer);
+	Vulkan::Buffer stagingBuffer;
+
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+	props.size = maxSize;
+	initBuffer(mDevice, mMemoryProperties, props, stagingBuffer);
 	void* ptr = mapBuffer(mDevice, stagingBuffer);
 	//copy vertex data
 	memcpy(ptr, vertices.data(), vbByteSize);
+
 	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->vertexBufferGPU, vbByteSize);
 	memcpy(ptr, indices.data(), ibByteSize);
 	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->indexBufferGPU, ibByteSize);
 	unmapBuffer(mDevice, stagingBuffer);
 	cleanupBuffer(mDevice, stagingBuffer);
 
-	geo->vertexBufferByteSize = vbByteSize;
-	geo->vertexByteStride = sizeof(Vertex);
-	geo->indexBufferByteSize = ibByteSize;
+	//initBuffer(mDevice, mMemoryProperties, vbByteSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->vertexBufferGPU);
+	//initBuffer(mDevice, mMemoryProperties, ibByteSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->indexBufferGPU);
+
+	//VkDeviceSize maxSize = std::max(vbByteSize, ibByteSize);
+	//Buffer stagingBuffer;
+	//initBuffer(mDevice, mMemoryProperties, maxSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer);
+	//void* ptr = mapBuffer(mDevice, stagingBuffer);
+	////copy vertex data
+	//memcpy(ptr, vertices.data(), vbByteSize);
+	//CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->vertexBufferGPU, vbByteSize);
+	//memcpy(ptr, indices.data(), ibByteSize);
+	//CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->indexBufferGPU, ibByteSize);
+	//unmapBuffer(mDevice, stagingBuffer);
+	//cleanupBuffer(mDevice, stagingBuffer);
+
+	geo->VertexBufferByteSize = vbByteSize;
+	geo->VertexByteStride = sizeof(Vertex);
+	geo->IndexBufferByteSize = ibByteSize;
 
 	geo->DrawArgs["box"] = boxSubmesh;
 	geo->DrawArgs["grid"] = gridSubmesh;
@@ -372,45 +321,73 @@ void TexColumnsApp::BuildShapeGeometry() {
 
 }
 
+
 void TexColumnsApp::BuildPSOs() {
-	std::vector<ShaderModule> shaders = {
-		{initShaderModule(mDevice,"shaders/default.vert.spv"),VK_SHADER_STAGE_VERTEX_BIT},
-		{initShaderModule(mDevice,"shaders/default.frag.spv"),VK_SHADER_STAGE_FRAGMENT_BIT}
+	VulkanContext vulkanContext{ mDevice,mDeviceProperties,mMemoryProperties,mCommandBuffer,mGraphicsQueue };
+	pipelineRes = std::make_unique<ShaderResources>(vulkanContext);
+	Vulkan::Texture textures[] = { *mTextures["bricksTex"].get(),*mTextures["stoneTex"].get(),*mTextures["tileTex"].get() };
+	std::vector<std::vector<ShaderResource>> pipelineResourceInfos{
+		{
+			{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(PassConstants),1,true},
+		},
+		{
+			{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT,sizeof(ObjectConstants),mAllRitems.size(),true},
+		},
+		{
+			{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,sizeof(MaterialConstants),mMaterials.size(),true},
+		},
+		{
+			{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,VK_SHADER_STAGE_FRAGMENT_BIT,textures,3},
+		}
 	};
-	VkPipeline opaquePipeline = initGraphicsPipeline(mDevice, mRenderPass, mPipelineLayout, shaders, Vertex::getInputBindingDescription(), Vertex::getInputAttributeDescription(), VK_CULL_MODE_FRONT_BIT, true, mMSAA ? mNumSamples : VK_SAMPLE_COUNT_1_BIT, VK_FALSE, VK_POLYGON_MODE_FILL);
-	VkPipeline wireframePipeline = initGraphicsPipeline(mDevice, mRenderPass, mPipelineLayout, shaders, Vertex::getInputBindingDescription(), Vertex::getInputAttributeDescription(), VK_CULL_MODE_FRONT_BIT, true, mMSAA ? mNumSamples : VK_SAMPLE_COUNT_1_BIT, VK_FALSE, VK_POLYGON_MODE_LINE);
+	pipelineRes->AddShaderResources(pipelineResourceInfos, gNumFrameResources);
 
+	prog = std::make_unique<ShaderProgram>(mDevice);
+	std::vector<const char*> shaderPaths = { "Shaders/default.vert.spv","Shaders/default.frag.spv" };
+	prog->load(shaderPaths);
 
-	mPSOs["opaque"] = opaquePipeline;
-	mPSOs["opaque_wireframe"] = wireframePipeline;
+	pipelineLayout = std::make_unique<PipelineLayout>(mDevice, *pipelineRes);
+	Vulkan::PipelineInfo pipelineInfo;
+	pipelineInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+	pipelineInfo.polygonMode = VK_POLYGON_MODE_FILL;
+	pipelineInfo.depthTest = VK_TRUE;
 
+	opaquePipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
 
-	cleanupShaderModule(mDevice, shaders[0].shaderModule);
-	cleanupShaderModule(mDevice, shaders[1].shaderModule);
+	pipelineInfo.polygonMode = VK_POLYGON_MODE_LINE;
+	wireframePipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+
+	mPSOs["opaque"] = *opaquePipeline;
+	mPSOs["opaque_wireframe"] = *wireframePipeline;
+
 }
 
-void TexColumnsApp::BuildFrameResources()
-{
-	for (int i = 0; i < gNumFrameResources; ++i)
-	{
-		std::vector<VkDescriptorSet> descriptorSets{
-			mDescriptorSetsPC[i],
-			mDescriptorSetsOBs[i],
-			mDescriptorSetsMats[i]
-		};
-		mFrameResources.push_back(std::make_unique<FrameResource>(mDevice, mMemoryProperties, descriptorSets, (uint32_t)mDeviceProperties.limits.minUniformBufferOffsetAlignment,
-			1, (UINT)mAllRitems.size(), (UINT)mMaterials.size()));
+void TexColumnsApp::BuildFrameResources() {
+	void* pPassCB = pipelineRes->GetShaderResource(0).buffer.ptr;
+	VkDeviceSize passSize = pipelineRes->GetShaderResource(0).buffer.objectSize;
+	void* pObjectCB = pipelineRes->GetShaderResource(1).buffer.ptr;
+	VkDeviceSize objectSize = pipelineRes->GetShaderResource(1).buffer.objectSize;
+	void* pMatCB = pipelineRes->GetShaderResource(2).buffer.ptr;
+	VkDeviceSize matSize = pipelineRes->GetShaderResource(2).buffer.objectSize;
+	for (int i = 0; i < gNumFrameResources; i++) {
+
+		//PassConstants* pc = (PassConstants*)mVulkanManager->GetBufferPtr(passConstantHash, 0);
+		//ObjectConstants* oc = (ObjectConstants*)((uint8_t*)mVulkanManager->GetBufferPtr(objectConstantHash, 0)+i*mVulkanManager->GetBufferOffset(objectConstantHash,0));
+
+		PassConstants* pc = (PassConstants*)((uint8_t*)pPassCB + passSize * i);
+		ObjectConstants* oc = (ObjectConstants*)((uint8_t*)pObjectCB + objectSize * mAllRitems.size() * i);
+		MaterialConstants* mc = (MaterialConstants*)((uint8_t*)pMatCB + matSize * mMaterials.size() * i);
+
+		mFrameResources.push_back(std::make_unique<FrameResource>(pc, oc, mc));
 	}
 }
-
 
 void TexColumnsApp::BuildMaterials()
 {
 	auto bricks0 = std::make_unique<Material>();
 	bricks0->NumFramesDirty = gNumFrameResources;
 	bricks0->Name = "bricks0";
-	bricks0->MatCBIndex = 0;
-	bricks0->DiffuseSrvHeapIndex = 0;
+	bricks0->MatCBIndex = 0;		
 	bricks0->DiffuseAlbedo = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
 	bricks0->FresnelR0 = glm::vec3(0.02f, 0.02f, 0.02f);
 	bricks0->Roughness = 0.1f;
@@ -418,8 +395,7 @@ void TexColumnsApp::BuildMaterials()
 	auto stone0 = std::make_unique<Material>();
 	stone0->NumFramesDirty = gNumFrameResources;
 	stone0->Name = "stone0";
-	stone0->MatCBIndex = 1;
-	stone0->DiffuseSrvHeapIndex = 1;
+	stone0->MatCBIndex = 1;		
 	stone0->DiffuseAlbedo = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
 	stone0->FresnelR0 = glm::vec3(0.05f, 0.05f, 0.05f);
 	stone0->Roughness = 0.3f;
@@ -427,8 +403,7 @@ void TexColumnsApp::BuildMaterials()
 	auto tile0 = std::make_unique<Material>();
 	tile0->NumFramesDirty = gNumFrameResources;
 	tile0->Name = "tile0";
-	tile0->MatCBIndex = 2;
-	tile0->DiffuseSrvHeapIndex = 2;
+	tile0->MatCBIndex = 2;	
 	tile0->DiffuseAlbedo = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
 	tile0->FresnelR0 = glm::vec3(0.02f, 0.02f, 0.02f);
 	tile0->Roughness = 0.3f;
@@ -445,9 +420,9 @@ void TexColumnsApp::BuildRenderItems() {
 	boxRitem->Mat = mMaterials["stone0"].get();
 	boxRitem->Geo = mGeometries["shapeGeo"].get();
 	//boxRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-	boxRitem->IndexCount = boxRitem->Geo->DrawArgs["box"].indexCount;
-	boxRitem->StartIndexLocation = boxRitem->Geo->DrawArgs["box"].startIndexLocation;
-	boxRitem->BaseVertexLocation = boxRitem->Geo->DrawArgs["box"].baseVertexLocation;
+	boxRitem->IndexCount = boxRitem->Geo->DrawArgs["box"].IndexCount;
+	boxRitem->StartIndexLocation = boxRitem->Geo->DrawArgs["box"].StartIndexLocation;
+	boxRitem->BaseVertexLocation = boxRitem->Geo->DrawArgs["box"].BaseVertexLocation;
 	mAllRitems.push_back(std::move(boxRitem));
 
 	auto gridRitem = std::make_unique<RenderItem>();
@@ -456,9 +431,9 @@ void TexColumnsApp::BuildRenderItems() {
 	gridRitem->Mat = mMaterials["tile0"].get();
 	gridRitem->Geo = mGeometries["shapeGeo"].get();
 	//gridRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-	gridRitem->IndexCount = gridRitem->Geo->DrawArgs["grid"].indexCount;
-	gridRitem->StartIndexLocation = gridRitem->Geo->DrawArgs["grid"].startIndexLocation;
-	gridRitem->BaseVertexLocation = gridRitem->Geo->DrawArgs["grid"].baseVertexLocation;
+	gridRitem->IndexCount = gridRitem->Geo->DrawArgs["grid"].IndexCount;
+	gridRitem->StartIndexLocation = gridRitem->Geo->DrawArgs["grid"].StartIndexLocation;
+	gridRitem->BaseVertexLocation = gridRitem->Geo->DrawArgs["grid"].BaseVertexLocation;
 	mAllRitems.push_back(std::move(gridRitem));
 
 	uint32_t objCBIndex = 2;
@@ -480,36 +455,36 @@ void TexColumnsApp::BuildRenderItems() {
 		leftCylRitem->Mat = mMaterials["bricks0"].get();
 		leftCylRitem->Geo = mGeometries["shapeGeo"].get();
 		//leftCylRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-		leftCylRitem->IndexCount = leftCylRitem->Geo->DrawArgs["cylinder"].indexCount;
-		leftCylRitem->StartIndexLocation = leftCylRitem->Geo->DrawArgs["cylinder"].startIndexLocation;
-		leftCylRitem->BaseVertexLocation = leftCylRitem->Geo->DrawArgs["cylinder"].baseVertexLocation;
+		leftCylRitem->IndexCount = leftCylRitem->Geo->DrawArgs["cylinder"].IndexCount;
+		leftCylRitem->StartIndexLocation = leftCylRitem->Geo->DrawArgs["cylinder"].StartIndexLocation;
+		leftCylRitem->BaseVertexLocation = leftCylRitem->Geo->DrawArgs["cylinder"].BaseVertexLocation;
 
 		rightCylRitem->World = leftCylWorld;
 		rightCylRitem->ObjCBIndex = objCBIndex++;
 		rightCylRitem->Mat = mMaterials["bricks0"].get();
 		rightCylRitem->Geo = mGeometries["shapeGeo"].get();
 		//rightCylRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-		rightCylRitem->IndexCount = rightCylRitem->Geo->DrawArgs["cylinder"].indexCount;
-		rightCylRitem->StartIndexLocation = rightCylRitem->Geo->DrawArgs["cylinder"].startIndexLocation;
-		rightCylRitem->BaseVertexLocation = rightCylRitem->Geo->DrawArgs["cylinder"].baseVertexLocation;
+		rightCylRitem->IndexCount = rightCylRitem->Geo->DrawArgs["cylinder"].IndexCount;
+		rightCylRitem->StartIndexLocation = rightCylRitem->Geo->DrawArgs["cylinder"].StartIndexLocation;
+		rightCylRitem->BaseVertexLocation = rightCylRitem->Geo->DrawArgs["cylinder"].BaseVertexLocation;
 
 		leftSphereRitem->World = leftSphereWorld;
 		leftSphereRitem->ObjCBIndex = objCBIndex++;
 		leftSphereRitem->Mat = mMaterials["stone0"].get();
 		leftSphereRitem->Geo = mGeometries["shapeGeo"].get();
 		//leftSphereRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-		leftSphereRitem->IndexCount = leftSphereRitem->Geo->DrawArgs["sphere"].indexCount;
-		leftSphereRitem->StartIndexLocation = leftSphereRitem->Geo->DrawArgs["sphere"].startIndexLocation;
-		leftSphereRitem->BaseVertexLocation = leftSphereRitem->Geo->DrawArgs["sphere"].baseVertexLocation;
+		leftSphereRitem->IndexCount = leftSphereRitem->Geo->DrawArgs["sphere"].IndexCount;
+		leftSphereRitem->StartIndexLocation = leftSphereRitem->Geo->DrawArgs["sphere"].StartIndexLocation;
+		leftSphereRitem->BaseVertexLocation = leftSphereRitem->Geo->DrawArgs["sphere"].BaseVertexLocation;
 
 		rightSphereRitem->World = rightSphereWorld;
 		rightSphereRitem->ObjCBIndex = objCBIndex++;
 		rightSphereRitem->Mat = mMaterials["stone0"].get();
 		rightSphereRitem->Geo = mGeometries["shapeGeo"].get();
 		//rightSphereRitem->PrimitiveType = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-		rightSphereRitem->IndexCount = rightSphereRitem->Geo->DrawArgs["sphere"].indexCount;
-		rightSphereRitem->StartIndexLocation = rightSphereRitem->Geo->DrawArgs["sphere"].startIndexLocation;
-		rightSphereRitem->BaseVertexLocation = rightSphereRitem->Geo->DrawArgs["sphere"].baseVertexLocation;
+		rightSphereRitem->IndexCount = rightSphereRitem->Geo->DrawArgs["sphere"].IndexCount;
+		rightSphereRitem->StartIndexLocation = rightSphereRitem->Geo->DrawArgs["sphere"].StartIndexLocation;
+		rightSphereRitem->BaseVertexLocation = rightSphereRitem->Geo->DrawArgs["sphere"].BaseVertexLocation;
 
 		mAllRitems.push_back(std::move(leftCylRitem));
 		mAllRitems.push_back(std::move(rightCylRitem));
@@ -523,42 +498,9 @@ void TexColumnsApp::BuildRenderItems() {
 		mOpaqueRitems.push_back(e.get());
 	}
 }
-void TexColumnsApp::BuildRootSignature() {
-	//build pipeline layout
-	std::vector<VkDescriptorSetLayout> layouts = {
-		mDescriptorSetLayoutPC,
-		mDescriptorSetLayoutOBs,
-		mDescriptorSetLayoutMats,
-		mDescriptorSetLayoutTextures
-	};
-	mPipelineLayout = initPipelineLayout(mDevice, layouts);
-}
-
-void TexColumnsApp::LoadTextures() {
-	auto bricksTex = std::make_unique<Texture>();
-	bricksTex->Name = "bricksTex";
-	bricksTex->FileName = "../../../Textures/bricks.jpg";
-	loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mFormatProperties, mMemoryProperties, bricksTex->FileName.c_str(), *bricksTex);	
-	mTextures[bricksTex->Name] = std::move(bricksTex);
-	auto stoneTex = std::make_unique<Texture>();
-	stoneTex->Name = "stoneTex";
-	stoneTex->FileName = "../../../Textures/stone.jpg";
-	loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mFormatProperties, mMemoryProperties, stoneTex->FileName.c_str(), *stoneTex);
-	mTextures[stoneTex->Name] = std::move(stoneTex);
-	auto tileTex = std::make_unique<Texture>();
-	tileTex->Name = "tileTex";
-	tileTex->FileName = "../../../Textures/tile.jpg";
-	loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mFormatProperties, mMemoryProperties, tileTex->FileName.c_str(), *tileTex);
-	mTextures[tileTex->Name] = std::move(tileTex);
-}
-
-
-void TexColumnsApp::OnResize() {
-	VulkApp::OnResize();
-	mProj = glm::perspectiveFovLH_ZO(0.25f * pi, (float)mClientWidth, (float)mClientHeight, 1.0f, 1000.0f);
-}
 
 void TexColumnsApp::Update(const GameTimer& gt) {
+	VulkApp::Update(gt);
 	OnKeyboardInput(gt);
 	UpdateCamera(gt);
 
@@ -566,11 +508,7 @@ void TexColumnsApp::Update(const GameTimer& gt) {
 	mCurrFrameResourceIndex = (mCurrFrameResourceIndex + 1) % gNumFrameResources;
 	mCurrFrameResource = mFrameResources[mCurrFrameResourceIndex].get();
 
-	// Has the GPU finished processing the commands of the current frame resource?
-	// If not, wait until the GPU has completed commands up to this fence point.
-	vkWaitForFences(mDevice, 1, &mCurrFrameResource->Fence, VK_TRUE, UINT64_MAX);
-	vkResetFences(mDevice, 1, &mCurrFrameResource->Fence);
-
+	
 	AnimateMaterials(gt);
 	UpdateObjectCBs(gt);
 	UpdateMaterialsCBs(gt);
@@ -578,63 +516,108 @@ void TexColumnsApp::Update(const GameTimer& gt) {
 
 }
 
-void TexColumnsApp::Draw(const GameTimer& gt) {
-	uint32_t index = 0;
-	VkCommandBuffer cmd{ VK_NULL_HANDLE };
+void TexColumnsApp::UpdateCamera(const GameTimer& gt) {
+	float x = mRadius * sinf(mPhi) * cosf(mTheta);
+	float z = mRadius * sinf(mPhi) * sinf(mTheta);
+	float y = mRadius * cosf(mPhi);
 
-	cmd = BeginRender();
+	mEyePos = glm::vec3(x, y, z);
 
-	VkViewport viewport = { 0.0f,0.0f,(float)mClientWidth,(float)mClientHeight,0.0f,1.0f };
-	pvkCmdSetViewport(cmd, 0, 1, &viewport);
-	VkRect2D scissor = { {0,0},{(uint32_t)mClientWidth,(uint32_t)mClientHeight} };
-	pvkCmdSetScissor(cmd, 0, 1, &scissor);
+	glm::vec3 pos = glm::vec3(x, y, z);
+	glm::vec3 target = glm::vec3(0.0f);
+	glm::vec3 up = glm::vec3(0.0, 1.0f, 0.0f);
 
+	mView = glm::lookAtLH(pos, target, up);
+}
 
-	if (mIsWireframe) {
-		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["opaque_wireframe"]);
+void TexColumnsApp::UpdateObjectCBs(const GameTimer& gt) {
+	//auto currObjectCB = mCurrFrameResource->ObjectCB;
+	//uint8_t* pObjConsts = (uint8_t*)mCurrFrameResource->pOCs;
+	//VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
+	//VkDeviceSize objSize = ((uint32_t)sizeof(ObjectConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
+	uint8_t* pObjConsts = (uint8_t*)mCurrFrameResource->pOCs;
+	VkDeviceSize objSize = pipelineRes->GetShaderResource(1).buffer.objectSize;
+	for (auto& e : mAllRitems) {
+		//Only update the cbuffer data if the constants have changed.
+		//This needs to be tracked per frame resource.
+		if (e->NumFramesDirty > 0) {
+			glm::mat4 world = e->World;
+			ObjectConstants objConstants;
+			objConstants.World = world;
+			objConstants.TexTransform = e->TexTransform;
+			memcpy((pObjConsts + (objSize * e->ObjCBIndex)), &objConstants, sizeof(objConstants));
+			//pObjConsts[e->ObjCBIndex] = objConstants;
+			e->NumFramesDirty--;
+		}
 	}
-	else {
-		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["opaque"]);
+}
+
+void TexColumnsApp::UpdateMainPassCB(const GameTimer& gt) {
+	glm::mat4 view = mView;
+	glm::mat4 proj = mProj;
+	proj[1][1] *= -1;
+	glm::mat4 viewProj = proj * view;//reverse for column major matrices view * proj
+	glm::mat4 invView = glm::inverse(view);
+	glm::mat4 invProj = glm::inverse(proj);
+	glm::mat4 invViewProj = glm::inverse(viewProj);
+
+	PassConstants* pPassConstants = mCurrFrameResource->pPCs;
+	mMainPassCB.View = view;
+	mMainPassCB.Proj = proj;
+	mMainPassCB.ViewProj = viewProj;
+	mMainPassCB.InvView = invView;
+	mMainPassCB.InvProj = invProj;
+	mMainPassCB.InvViewProj = invViewProj;
+	mMainPassCB.EyePosW = mEyePos;
+	mMainPassCB.RenderTargetSize = glm::vec2(mClientWidth, mClientHeight);
+	mMainPassCB.InvRenderTargetSize = glm::vec2(1.0f / mClientWidth, 1.0f / mClientHeight);
+	mMainPassCB.NearZ = 1.0f;
+	mMainPassCB.FarZ = 1000.0f;
+	mMainPassCB.TotalTime = gt.TotalTime();
+	mMainPassCB.DeltaTime = gt.DeltaTime();
+	mMainPassCB.AmbientLight = { 0.25f, 0.25f, 0.35f, 1.0f };
+	mMainPassCB.Lights[0].Direction = { 0.57735f, -0.57735f, 0.57735f };
+	mMainPassCB.Lights[0].Strength = { 0.8f, 0.8f, 0.8f };
+	mMainPassCB.Lights[1].Direction = { -0.57735f, -0.57735f, 0.57735f };
+	mMainPassCB.Lights[1].Strength = { 0.4f, 0.4f, 0.4f };
+	mMainPassCB.Lights[2].Direction = { 0.0f, -0.707f, -0.707f };
+	mMainPassCB.Lights[2].Strength = { 0.2f, 0.2f, 0.2f };
+	memcpy(pPassConstants, &mMainPassCB, sizeof(PassConstants));
+}
+
+
+void TexColumnsApp::UpdateMaterialsCBs(const GameTimer& gt) {
+	//VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
+	//VkDeviceSize objSize = ((uint32_t)sizeof(MaterialConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
+	//uint8_t* pMatConsts = (uint8_t*)mCurrFrameResource->pMats;
+	uint8_t* pMatConsts = (uint8_t*)mCurrFrameResource->pMats;
+	VkDeviceSize objSize = pipelineRes->GetShaderResource(2).buffer.objectSize;
+	for (auto& e : mMaterials) {
+		Material* mat = e.second.get();
+		if (mat->NumFramesDirty > 0) {
+			glm::mat4 matTransform = mat->MatTransform;
+			MaterialConstants matConstants;
+			matConstants.DiffuseAlbedo = mat->DiffuseAlbedo;
+			matConstants.FresnelR0 = mat->FresnelR0;
+			matConstants.Roughness = mat->Roughness;
+			matConstants.MatTransform = matTransform;
+
+			//memcpy(&mCurrFrameResource->pMats[mat->MatCBIndex] , &matConstants, sizeof(MaterialConstants));
+			memcpy((pMatConsts + (objSize * mat->MatCBIndex)), &matConstants, sizeof(MaterialConstants));
+			mat->NumFramesDirty--;
+
+		}
 	}
+}
 
 
-
-	DrawRenderItems(cmd, mOpaqueRitems);
-
-	EndRender(cmd, mCurrFrameResource->Fence);
-
+void TexColumnsApp::AnimateMaterials(const GameTimer& gt) {
 
 }
 
-void TexColumnsApp::DrawRenderItems(VkCommandBuffer cmd, const std::vector<RenderItem*>& ritems) {
-	//	VkDeviceSize obSize = mCurrFrameResource->ObjectCBSize;
-	VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
-	VkDeviceSize objSize = ((uint32_t)sizeof(ObjectConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
-	VkDeviceSize matSize = ((uint32_t)sizeof(Material) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
-	uint32_t dynamicOffsets[1] = { 0 };
-	uint32_t count = getSwapchainImageCount(mSurfaceCaps);
-	pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets);//bind PC data once
-
-	for (size_t i = 0; i < ritems.size(); i++) {
-		auto ri = ritems[i];
-		uint32_t indexOffset = ri->StartIndexLocation;
-
-		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 3, 1, &mDescriptorSetsTextures[ri->Mat->DiffuseSrvHeapIndex], 0, 0);//bin texture descriptor
-		const auto vbv = ri->Geo->vertexBufferGPU;
-		pvkCmdBindVertexBuffers(cmd, 0, 1, &vbv.buffer, mOffsets);
-		const auto ibv = ri->Geo->indexBufferGPU;
-		pvkCmdBindIndexBuffer(cmd, ibv.buffer, indexOffset * sizeof(uint32_t), VK_INDEX_TYPE_UINT32);
-		uint32_t cbvIndex = ri->ObjCBIndex;
-		//uint32_t dynamicOffsets[2] = { 0,cbvIndex *objSize};
-
-		dynamicOffsets[0] = (uint32_t)(cbvIndex * objSize);
-		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsOBs[mIndex], 2, dynamicOffsets);
-		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 1, 1, &mDescriptorSetsOBs[mIndex], 1, dynamicOffsets);
-		dynamicOffsets[0] = (uint32_t)(ri->Mat->MatCBIndex * matSize);
-		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 2, 1, &mDescriptorSetsMats[mIndex], 1, dynamicOffsets);
-
-		pvkCmdDrawIndexed(cmd, ri->IndexCount, 1, 0, ri->BaseVertexLocation, 0);
-	}
+void TexColumnsApp::OnResize() {
+	VulkApp::OnResize();
+	mProj = glm::perspectiveFovLH_ZO(0.25f * pi, (float)mClientWidth, (float)mClientHeight, 1.0f, 1000.0f);
 }
 
 void TexColumnsApp::OnMouseDown(WPARAM btnState, int x, int y) {
@@ -676,6 +659,7 @@ void TexColumnsApp::OnMouseMove(WPARAM btnState, int x, int y) {
 	mLastMousePos.x = x;
 	mLastMousePos.y = y;
 }
+
 void TexColumnsApp::OnKeyboardInput(const GameTimer& gt)
 {
 	if (GetAsyncKeyState('1') & 0x8000)
@@ -683,99 +667,94 @@ void TexColumnsApp::OnKeyboardInput(const GameTimer& gt)
 	else
 		mIsWireframe = false;
 
-	const float dt = gt.DeltaTime();
 }
 
-void TexColumnsApp::UpdateCamera(const GameTimer& gt) {
-	float x = mRadius * sinf(mPhi) * cosf(mTheta);
-	float z = mRadius * sinf(mPhi) * sinf(mTheta);
-	float y = mRadius * cosf(mPhi);
 
-	mEyePos = glm::vec3(x, y, z);
+void TexColumnsApp::Draw(const GameTimer& gt) {
+	uint32_t index = 0;
+	VkCommandBuffer cmd{ VK_NULL_HANDLE };
 
-	glm::vec3 pos = glm::vec3(x, y, z);
-	glm::vec3 target = glm::vec3(0.0f);
-	glm::vec3 up = glm::vec3(0.0, 1.0f, 0.0f);
+	cmd = BeginRender();
 
-	mView = glm::lookAtLH(pos, target, up);
-}
+	VkViewport viewport = { 0.0f,0.0f,(float)mClientWidth,(float)mClientHeight,0.0f,1.0f };
+	pvkCmdSetViewport(cmd, 0, 1, &viewport);
+	VkRect2D scissor = { {0,0},{(uint32_t)mClientWidth,(uint32_t)mClientHeight} };
+	pvkCmdSetScissor(cmd, 0, 1, &scissor);
 
-void TexColumnsApp::UpdateObjectCBs(const GameTimer& gt) {
-	auto currObjectCB = mCurrFrameResource->ObjectCB;
-	uint8_t* pObjConsts = (uint8_t*)mCurrFrameResource->pOCs;
-	VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
-	VkDeviceSize objSize = ((uint32_t)sizeof(ObjectConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
-	for (auto& e : mAllRitems) {
-		//Only update the cbuffer data if the constants have changed.
-		//This needs to be tracked per frame resource.
-		if (e->NumFramesDirty > 0) {
-			glm::mat4 world = e->World;
-			ObjectConstants objConstants;
-			objConstants.World = world;
-			objConstants.TexTransform = e->TexTransform;
-			memcpy((pObjConsts + (objSize * e->ObjCBIndex)), &objConstants, sizeof(objConstants));
-			//pObjConsts[e->ObjCBIndex] = objConstants;
-			e->NumFramesDirty--;
-		}
+	if (mIsWireframe) {
+		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *wireframePipeline);// mPSOs["opaque_wireframe"]);
 	}
-}
-void TexColumnsApp::UpdateMainPassCB(const GameTimer& gt) {
-	glm::mat4 view = mView;
-	glm::mat4 proj = mProj;
-	proj[1][1] *= -1;
-	glm::mat4 viewProj = proj * view;//reverse for column major matrices view * proj
-	glm::mat4 invView = glm::inverse(view);
-	glm::mat4 invProj = glm::inverse(proj);
-	glm::mat4 invViewProj = glm::inverse(viewProj);
+	else {
+		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *opaquePipeline);// mPSOs["opaque"]);
+	}
 
-	PassConstants* pPassConstants = mCurrFrameResource->pPCs;
-	mMainPassCB.View = view;
-	mMainPassCB.Proj = proj;
-	mMainPassCB.ViewProj = viewProj;
-	mMainPassCB.InvView = invView;
-	mMainPassCB.InvProj = invProj;
-	mMainPassCB.InvViewProj = invViewProj;
-	mMainPassCB.EyePosW = mEyePos;
-	mMainPassCB.RenderTargetSize = glm::vec2(mClientWidth, mClientHeight);
-	mMainPassCB.InvRenderTargetSize = glm::vec2(1.0f / mClientWidth, 1.0f / mClientHeight);
-	mMainPassCB.NearZ = 1.0f;
-	mMainPassCB.FarZ = 1000.0f;
-	mMainPassCB.TotalTime = gt.TotalTime();
-	mMainPassCB.DeltaTime = gt.DeltaTime();
-	mMainPassCB.AmbientLight = { 0.25f, 0.25f, 0.35f, 1.0f };
-	mMainPassCB.Lights[0].Direction = { 0.57735f, -0.57735f, 0.57735f };
-	mMainPassCB.Lights[0].Strength = { 0.8f, 0.8f, 0.8f };
-	mMainPassCB.Lights[1].Direction = { -0.57735f, -0.57735f, 0.57735f };
-	mMainPassCB.Lights[1].Strength = { 0.4f, 0.4f, 0.4f };
-	mMainPassCB.Lights[2].Direction = { 0.0f, -0.707f, -0.707f };
-	mMainPassCB.Lights[2].Strength = { 0.2f, 0.2f, 0.2f };
-	memcpy(pPassConstants, &mMainPassCB, sizeof(PassConstants));
+	DrawRenderItems(cmd, mOpaqueRitems);
+
+	EndRender(cmd);// , mCurrFrameResource->Fence);
 }
 
-void TexColumnsApp::UpdateMaterialsCBs(const GameTimer& gt) {
-	VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
-	VkDeviceSize objSize = ((uint32_t)sizeof(MaterialConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
-	uint8_t* pMatConsts = (uint8_t*)mCurrFrameResource->pMats;
-	for (auto& e : mMaterials) {
-		Material* mat = e.second.get();
-		if (mat->NumFramesDirty > 0) {
-			glm::mat4 matTransform = mat->MatTransform;
-			MaterialConstants matConstants;
-			matConstants.DiffuseAlbedo = mat->DiffuseAlbedo;
-			matConstants.FresnelR0 = mat->FresnelR0;
-			matConstants.Roughness = mat->Roughness;
-			matConstants.MatTransform = matTransform;
+void TexColumnsApp::DrawRenderItems(VkCommandBuffer cmd, const std::vector<RenderItem*>& ritems) {
+	uint32_t dynamicOffsets[1] = { 0 };
+	VkDescriptorSet descriptor = pipelineRes->GetDescriptorSet(0, mCurrFrame);
+	pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 0, 1, &descriptor, 1, dynamicOffsets);//bind PC data once
+	//pvkCmdBindVertexBuffers(cmd, 0, 1, &VertexBuffer.buffer, mOffsets);
+	VkDeviceSize objectSize = pipelineRes->GetShaderResource(1).buffer.objectSize;
+	VkDeviceSize matSize = pipelineRes->GetShaderResource(2).buffer.objectSize;
+	VkDescriptorSet descriptor2 = pipelineRes->GetDescriptorSet(1, mCurrFrame);
+	VkDescriptorSet descriptor3 = pipelineRes->GetDescriptorSet(2, mCurrFrame);
+	VkDescriptorSet descriptor4 = pipelineRes->GetDescriptorSet(3, mCurrFrame);
+	VkDescriptorSet descriptors[2] = { descriptor2,descriptor3 };
+	pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 3, 1, &descriptor4, 0, dynamicOffsets);//bind PC data once
+	for (size_t i = 0; i < ritems.size(); i++) {
+		auto ri = ritems[i];
+		uint32_t indexOffset = ri->StartIndexLocation;
 
-			//memcpy(&mCurrFrameResource->pMats[mat->MatCBIndex] , &matConstants, sizeof(MaterialConstants));
-			memcpy((pMatConsts + (objSize * mat->MatCBIndex)), &matConstants, sizeof(MaterialConstants));
-			mat->NumFramesDirty--;
+		const auto vbv = ri->Geo->vertexBufferGPU;
+		const auto ibv = ri->Geo->indexBufferGPU;
+		pvkCmdBindVertexBuffers(cmd, 0, 1, &vbv.buffer, mOffsets);
 
-		}
+
+		pvkCmdBindIndexBuffer(cmd, ibv.buffer, indexOffset * sizeof(uint32_t), VK_INDEX_TYPE_UINT32);
+		uint32_t cbvIndex = ri->ObjCBIndex;
+
+
+		uint32_t dyoffsets[2] = { (uint32_t)(cbvIndex * objectSize),(uint32_t)(ri->Mat->MatCBIndex * matSize) };
+
+
+
+		//dynamicOffsets[0] = (uint32_t)(cbvIndex * objectSize);
+		//
+		////VkDescriptorSet descriptor2 = pipelineRes->GetDescriptorSet(1, mCurrFrame);
+		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 1, 1, &descriptor2, 1, dynamicOffsets);
+		////VkDescriptorSet descriptor3 = pipelineRes->GetDescriptorSet(2, mCurrFrame);
+		//dynamicOffsets[0] = (uint32_t)(ri->Mat->MatCBIndex * matSize);
+		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 2, 1, &descriptor3, 1, dynamicOffsets);
+		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 1, 2, descriptors, 2, dyoffsets);
+		VkDescriptorSet descriptor4 = pipelineRes->GetDescriptorSet(3, ri->Mat->MatCBIndex);
+		
+		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 3, 1, &descriptor4, 0, dynamicOffsets);//bind PC data once
+		pvkCmdDrawIndexed(cmd, ri->IndexCount, 1, 0, ri->BaseVertexLocation, 0);
 	}
 }
 
-void TexColumnsApp::AnimateMaterials(const GameTimer& gt) {
 
+
+void TexColumnsApp::LoadTextures() {
+	auto bricksTex = std::make_unique<Texture>();
+	bricksTex->Name = "bricksTex";
+	bricksTex->FileName = "../../../Textures/bricks.jpg";
+	loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mMemoryProperties, bricksTex->FileName.c_str(), *bricksTex);
+	mTextures[bricksTex->Name] = std::move(bricksTex);
+	auto stoneTex = std::make_unique<Texture>();
+	stoneTex->Name = "stoneTex";
+	stoneTex->FileName = "../../../Textures/stone.jpg";
+	loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mMemoryProperties, stoneTex->FileName.c_str(), *stoneTex);
+	mTextures[stoneTex->Name] = std::move(stoneTex);
+	auto tileTex = std::make_unique<Texture>();
+	tileTex->Name = "tileTex";
+	tileTex->FileName = "../../../Textures/tile.jpg";
+	loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mMemoryProperties, tileTex->FileName.c_str(), *tileTex);
+	mTextures[tileTex->Name] = std::move(tileTex);
 }
 
 

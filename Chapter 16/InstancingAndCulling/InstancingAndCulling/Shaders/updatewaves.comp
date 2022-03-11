@@ -1,0 +1,41 @@
+#version 450
+layout (local_size_x=16, local_size_y=16)in;
+
+//cbuffer cbUpdateSettings
+//{
+//	float gWaveConstant0;
+//	float gWaveConstant1;
+//	float gWaveConstant2;
+//	float gDisturbMag;
+//	int2 gDisturbIndex;
+//};
+
+layout (set=0,binding=0) uniform UpdateSettings{
+	float gWaveConstant0;
+	float gWaveConstant1;
+	float gWaveConstant2;
+	float gDisturbMag;
+	ivec2 gDisturbIndex;
+}updateSettings;
+
+layout (set=1,binding=0,r32f) uniform readonly image2D gPrevSolInput;
+layout (set=1,binding=1,r32f) uniform readonly image2D gCurrSolInput;
+layout (set=1,binding=2,r32f) uniform image2D gOutput;
+
+void main(){
+	//int x = dispatchThreadID.x;
+	//int y = dispatchThreadID.y;
+	uint x = gl_GlobalInvocationID.x;
+	uint y = gl_GlobalInvocationID.y;
+	
+	
+	float f=
+		updateSettings.gWaveConstant0 * imageLoad(gPrevSolInput,ivec2(x,y)).r +
+		updateSettings.gWaveConstant1 * imageLoad(gCurrSolInput,ivec2(x,y)).r +
+		updateSettings.gWaveConstant2 *(
+			imageLoad(gCurrSolInput,ivec2(x,y+1)).r + 
+			imageLoad(gCurrSolInput,ivec2(x,y-1)).r + 
+			imageLoad(gCurrSolInput,ivec2(x+1,y)).r + 
+			imageLoad(gCurrSolInput,ivec2(x-1,y)).r);
+	imageStore(gOutput,ivec2(x,y),vec4(f,0,0,0)); 
+}

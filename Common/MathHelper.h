@@ -1,7 +1,9 @@
 #pragma once
 #include <Windows.h>
 #include <cstdint>
+#include <algorithm>
 #include <glm/glm.hpp>
+const float pi = 3.14159265358979323846264338327950288f;
 class MathHelper
 {
 public:
@@ -68,7 +70,7 @@ public:
 		return glm::mat4(1.0f);
 	}
 
-	
+
 
 	static glm::vec3 RandUnitVec3();
 	static glm::vec3 RandHemisphereUnitVec3(glm::vec3 n);
@@ -76,7 +78,7 @@ public:
 	static const float Infinity;
 	static const float Pi;
 
-	
+
 
 	static glm::vec4 splatX(glm::vec4 v) {
 		return glm::vec4(v.x);
@@ -121,11 +123,79 @@ public:
 		return v.w;
 	}
 	static glm::mat4 shadowMatrix(glm::vec4 lightPos, glm::vec4 plane) {
-		glm::mat4 res = glm::dot(plane,lightPos) *glm::mat4(1.0f)- glm::outerProduct(lightPos, plane);
+		glm::mat4 res = glm::dot(plane, lightPos) * glm::mat4(1.0f) - glm::outerProduct(lightPos, plane);
 		return res;
 	}
 	static glm::mat4 reflect(glm::vec4 plane);
 
+
+	static glm::vec3 vectorMin(glm::vec3& a, glm::vec3& b);
+	static glm::vec3 vectorMax(glm::vec3& a, glm::vec3& b);
+
+
+	/*struct Plane {
+		glm::vec3 abc;
+		float d{ 0 };
+		Plane(glm::vec3& p0, glm::vec3& p1, glm::vec3& p2) {
+			glm::vec3 v1 = p1 - p0;
+			glm::vec3 v2 = p2 - p0;
+			abc = glm::normalize(glm::cross(v1, v2));
+			d = -glm::dot(p0, abc);
+
+		}
+		float Distance(glm::vec3& point) {
+			return glm::dot(point, abc);
+		}
+	};
+
+	struct BoundingBox {
+		glm::vec3 points[8];
+	};
+
+
+	struct Frustrum {
+		Plane planes[6];
+		glm::vec3 fnear[4];
+		glm::vec3 ffar[4];
+		enum {
+			COORD_BOTTOMLEFT=0,
+			COORD_BOTTOMRIGHT,
+			COORD_TOPLEFT,
+			COORD_TOPRIGHT
+		};
+		enum {
+			PLANE_LEFT=0,
+			PLANE_RIGHT,
+			PLANE_BOTTOM,
+			PLANE_TOP,
+			PLANE_NEAR,
+			PLANE_FAR
+		};
+		bool Intersects(glm::vec3& point) {
+			for (int i = 0; i < 6; i++) {
+				if (planes[i].Distance(point) > 0)
+					return false;
+			}
+			return true;
+		}
+		bool Intersects(BoundingBox& box) {
+			for (int p = 0; p < 6; p++) {
+				for (int b = 0; b < 8; b++) {
+					if (planes[p].Distance(box.points[b]) < 0) {
+						continue;
+						return false;
+					}
+
+				}
+			}
+			return true;
+		}
+	};*/
+
+	
+
+
+	
 };
 
 

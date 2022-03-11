@@ -36,8 +36,8 @@ struct Vertex {
 	glm::vec3 Normal;
 	glm::vec2 TexC;
 	Vertex() = default;
-	Vertex(float x, float y, float z, float nx, float ny, float nz, float u, float v):Pos(x,y,z), Normal(nx,ny,nz),TexC(u,v){
-		
+	Vertex(float x, float y, float z, float nx, float ny, float nz, float u, float v) :Pos(x, y, z), Normal(nx, ny, nz), TexC(u, v) {
+
 	}
 	static VkVertexInputBindingDescription& getInputBindingDescription() {
 		static VkVertexInputBindingDescription bindingDescription = { 0,sizeof(Vertex),VK_VERTEX_INPUT_RATE_VERTEX };
@@ -53,23 +53,14 @@ struct Vertex {
 	}
 };
 
+
+
 struct FrameResource {
-	FrameResource(VkDevice device, VkPhysicalDeviceMemoryProperties memoryProperties, std::vector<VkDescriptorSet>& descriptorSets, uint32_t minAlignmentSize, uint32_t passCount, uint32_t objectCount, uint32_t materialCount);
+	FrameResource(PassConstants* pc, ObjectConstants* oc, MaterialConstants* mc);
 	FrameResource(const FrameResource& rhs) = delete;
 	FrameResource& operator=(const FrameResource& rhs) = delete;
 	~FrameResource();
-
-	VkDevice device{ VK_NULL_HANDLE };
-	VkFence Fence{ VK_NULL_HANDLE };
-	Buffer PassCB;
-	Buffer ObjectCB;
-	Buffer MaterialCB;
-	
-
 	PassConstants* pPCs{ nullptr };
 	ObjectConstants* pOCs{ nullptr };
-	MaterialConstants* pMats{ nullptr };
-	
-
-
+	MaterialConstants* pMats{ nullptr };	
 };

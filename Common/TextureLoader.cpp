@@ -3,35 +3,168 @@
 #include <stb_image.h>
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
+//#include <ktx.h>
+//#include <ktxvulkan.h>
+using namespace Vulkan;
 
-void loadTexture(VkDevice device,VkCommandBuffer commandBuffer, VkQueue queue,VkFormatProperties formatProperties, VkPhysicalDeviceMemoryProperties memoryProperties,const char* path,  Image& image, bool enableLod) {
-	int texWidth, texHeight, texChannels;
-	stbi_uc* texPixels = stbi_load(path, &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-	assert(texPixels);
-	VkDeviceSize imageSize = (uint64_t)texWidth * (uint64_t)texHeight * 4;
-	enableLod ? initTextureImage(device, PREFERRED_IMAGE_FORMAT, formatProperties, memoryProperties, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, (uint32_t)texWidth, (uint32_t)texHeight, image) :
-		initTextureImageNoMip(device, PREFERRED_IMAGE_FORMAT, formatProperties, memoryProperties, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, (uint32_t)texWidth, (uint32_t)texHeight, image);
+void loadTexture(VkDevice device, VkCommandBuffer commandBuffer, VkQueue queue, VkPhysicalDeviceMemoryProperties memoryProperties, uint8_t* pixels, uint32_t width, uint32_t height, VkFormat format, Vulkan::Texture& image, bool enableLod) {
+	assert(pixels);
+	VkDeviceSize imageSize = (uint64_t)width * (uint64_t)height * 4;
+	TextureProperties props;
+	props.format = PREFERRED_IMAGE_FORMAT;
+	props.imageUsage = (VkImageUsageFlagBits)(VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.width = (uint32_t)width;
+	props.height = (uint32_t)height;
+	props.mipLevels = enableLod ? 0 : 1;	
+	props.samplerProps.addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+	initTexture(device, memoryProperties, props, image);
 	transitionImage(device, queue, commandBuffer, image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, image.mipLevels);
 
 	VkDeviceSize maxSize = imageSize;
-
+	BufferProperties bufProps;
+	bufProps.size = maxSize;
+	bufProps.bufferUsage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+#ifdef __USE__VMA__
+	bufProps.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+#else
+	bufProps.memoryProps = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+#endif
 	Buffer stagingBuffer;
-	initBuffer(device, memoryProperties, maxSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer);
+	
+	initBuffer(device, memoryProperties, bufProps, stagingBuffer);
 	void* ptr = mapBuffer(device, stagingBuffer);
 	//copy image data using staging buffer
-	memcpy(ptr, texPixels, imageSize);
-	stbi_image_free(texPixels);
-	CopyBufferToImage(device, queue, commandBuffer, stagingBuffer, image, texWidth, texHeight);
+	memcpy(ptr, pixels, imageSize);
+	stbi_image_free(pixels);
+	CopyBufferToImage(device, queue, commandBuffer, stagingBuffer, image, width, height);
 
 	//even if lod not enabled, need to transition, so use this code.
 	generateMipMaps(device, queue, commandBuffer, image);
 
 	unmapBuffer(device, stagingBuffer);
 	cleanupBuffer(device, stagingBuffer);
+}
+
+
+void loadTexture(VkDevice device, VkCommandBuffer commandBuffer, VkQueue queue,/*VkFormatProperties formatProperties,*/ VkPhysicalDeviceMemoryProperties memoryProperties, const char* path, Texture& image, bool enableLod) {
+	int texWidth, texHeight, texChannels;
+	stbi_uc* texPixels = stbi_load(path, &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+	assert(texPixels);
+	loadTexture(device, commandBuffer, queue, memoryProperties, texPixels, texWidth, texHeight, PREFERRED_FORMAT, image, enableLod);
+//	VkDeviceSize imageSize = (uint64_t)texWidth * (uint64_t)texHeight * 4;
+//	TextureProperties props;
+//	props.format = PREFERRED_IMAGE_FORMAT;
+//	props.imageUsage = (VkImageUsageFlagBits)(VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+//#ifdef __USE__VMA__
+//	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+//#else
+//	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+//#endif
+//	props.width = (uint32_t)texWidth;
+//	props.height = (uint32_t)texHeight;
+//	props.mipLevels = enableLod ? 0 : 1;
+//	//props.samplerProps.filter = VK_FILTER_NEAREST;
+//	props.samplerProps.addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+//	initTexture(device, memoryProperties, props, image);
+//
+//	//enableLod ? initTextureImage(device, PREFERRED_IMAGE_FORMAT, formatProperties, memoryProperties, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, (uint32_t)texWidth, (uint32_t)texHeight, image) :
+////		initTextureImageNoMip(device, PREFERRED_IMAGE_FORMAT, formatProperties, memoryProperties, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, (uint32_t)texWidth, (uint32_t)texHeight, image);
+//	transitionImage(device, queue, commandBuffer, image.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, image.mipLevels);
+//
+//	VkDeviceSize maxSize = imageSize;
+//	BufferProperties bufProps;
+//	bufProps.size = maxSize;
+//	bufProps.bufferUsage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+//#ifdef __USE__VMA__
+//	bufProps.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+//#else
+//	bufProps.memoryProps = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+//#endif
+//	Buffer stagingBuffer;
+//	//initBuffer(device, memoryProperties, maxSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer);
+//	initBuffer(device, memoryProperties, bufProps, stagingBuffer);
+//	void* ptr = mapBuffer(device, stagingBuffer);
+//	//copy image data using staging buffer
+//	memcpy(ptr, texPixels, imageSize);
+//	stbi_image_free(texPixels);
+//	CopyBufferToImage(device, queue, commandBuffer, stagingBuffer, image, texWidth, texHeight);
+//
+//	//even if lod not enabled, need to transition, so use this code.
+//	generateMipMaps(device, queue, commandBuffer, image);
+//
+//	unmapBuffer(device, stagingBuffer);
+//	cleanupBuffer(device, stagingBuffer);
 
 }
 
-void saveScreenCap(VkDevice device, VkCommandBuffer cmd, VkQueue queue, VkImage srcImage, VkPhysicalDeviceMemoryProperties& memoryProperties, VkFormatProperties& formatProperties, VkFormat colorFormat, VkExtent2D extent, uint32_t index) {
+//void loadTexture_ktx(VkDevice device, VkCommandBuffer commandBuffer, VkQueue queue, VkPhysicalDeviceMemoryProperties memoryProperties, const char* path, Vulkan::Texture& texture, bool enableLod) {
+//	ktxResult result;
+//	ktxTexture* ktxTexture;
+//	result = ktxTexture_CreateFromNamedFile(path, KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &ktxTexture);
+//	assert(result == KTX_SUCCESS);
+//	ktx_uint8_t* pixels = ktxTexture_GetData(ktxTexture);
+//	VkDeviceSize imageSize = (VkDeviceSize)ktxTexture_GetDataSize(ktxTexture);
+//	//get properties 
+//
+//	TextureProperties props;
+//	props.format = PREFERRED_IMAGE_FORMAT;
+//	props.imageUsage = (VkImageUsageFlagBits)(VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+//	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+//	props.width = (uint32_t)ktxTexture->baseWidth;
+//	props.height = (uint32_t)ktxTexture->baseHeight;
+//	props.mipLevels = enableLod ? ktxTexture->numLevels : 1;
+//	props.samplerProps.addressMode = VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+//	initTexture(device, memoryProperties, props, texture);
+//	transitionImage(device, queue, commandBuffer, texture.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, texture.mipLevels);
+//
+//	BufferProperties bufProps;
+//	bufProps.size = imageSize;
+//	bufProps.bufferUsage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+//	bufProps.memoryProps = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+//
+//	Buffer stagingBuffer;
+//	initBuffer(device, memoryProperties, bufProps, stagingBuffer);
+//	void* ptr = mapBuffer(device, stagingBuffer);
+//	memcpy(ptr, pixels, imageSize);
+//
+//	std::vector<VkBufferImageCopy> bufferCopyRegions;
+//	uint32_t offset = 0;
+//
+//	for (uint32_t i = 0; i < texture.mipLevels; i++) {
+//		// Calculate offset into staging buffer for the current mip level
+//		ktx_size_t offset;
+//		KTX_error_code ret = ktxTexture_GetImageOffset(ktxTexture, i, 0, 0, &offset);
+//		assert(ret == KTX_SUCCESS);
+//		// Setup a buffer image copy structure for the current mip level
+//		VkBufferImageCopy bufferCopyRegion = {};
+//		bufferCopyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+//		bufferCopyRegion.imageSubresource.mipLevel = i;
+//		bufferCopyRegion.imageSubresource.baseArrayLayer = 0;
+//		bufferCopyRegion.imageSubresource.layerCount = 1;
+//		bufferCopyRegion.imageExtent.width = ktxTexture->baseWidth >> i;
+//		bufferCopyRegion.imageExtent.height = ktxTexture->baseHeight >> i;
+//		bufferCopyRegion.imageExtent.depth = 1;
+//		bufferCopyRegion.bufferOffset = offset;
+//		bufferCopyRegions.push_back(bufferCopyRegion);
+//	}
+//
+//	Vulkan::CopyBufferToImage(device, queue, commandBuffer, stagingBuffer, texture, bufferCopyRegions);
+//
+//	unmapBuffer(device, stagingBuffer);
+//	cleanupBuffer(device, stagingBuffer);
+//
+//	transitionImage(device, queue, commandBuffer, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, texture.mipLevels);
+//}
+#ifdef __USE__VMA__
+void saveScreenCap(VkDevice device, VkCommandBuffer cmd, VkQueue queue, VkImage srcImage, VkFormatProperties& formatProperties, VkFormat colorFormat, VkExtent2D extent, uint32_t index) {
+#else
+void saveScreenCap(VkDevice device, VkCommandBuffer cmd, VkQueue queue, VkImage srcImage,	VkPhysicalDeviceMemoryProperties& memoryProperties, VkFormat colorFormat, VkExtent2D extent, uint32_t index) {
+#endif
 	//cribbed from Sascha Willems code.
 
 	bool supportsBlit = (formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) && (formatProperties.linearTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT);
@@ -46,7 +179,12 @@ void saveScreenCap(VkDevice device, VkCommandBuffer cmd, VkQueue queue, VkImage 
 	imageCI.tiling = VK_IMAGE_TILING_LINEAR;
 	imageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	imageCI.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-	VkResult res = vkCreateImage(device, &imageCI, nullptr, &dstImage.image);
+	VkResult res = VK_SUCCESS;
+#ifdef __USE__VMA__
+	Vulkan::initImage(device, imageCI, dstImage,true);
+
+#else
+	res = vkCreateImage(device, &imageCI, nullptr, &dstImage.image);
 	assert(res == VK_SUCCESS);
 
 	VkMemoryRequirements memReqs{};
@@ -58,7 +196,7 @@ void saveScreenCap(VkDevice device, VkCommandBuffer cmd, VkQueue queue, VkImage 
 	assert(res == VK_SUCCESS);
 	res = vkBindImageMemory(device, dstImage.image, dstImage.memory, 0);
 	assert(res == VK_SUCCESS);
-
+#endif
 
 
 
@@ -147,13 +285,17 @@ void saveScreenCap(VkDevice device, VkCommandBuffer cmd, VkQueue queue, VkImage 
 	}
 
 	uint8_t* data{ nullptr };
+#ifdef __USE__VMA__
+	data =(uint8_t*) dstImage.allocationInfo.pMappedData;
+#else
 	vkMapMemory(device, dstImage.memory, 0, VK_WHOLE_SIZE, 0, (void**)&data);
+#endif
 	data += subResourceLayout.offset;
 	char fname[512];
-	_itoa_s(index,fname, sizeof(fname), 10);
+	_itoa_s(index, fname, sizeof(fname), 10);
 	char path[512];
 	sprintf_s(path, "%s.jpg", fname);
-	
+
 	if (colorSwizzle) {
 		uint32_t* ppixel = (uint32_t*)data;
 		//must be a better way to do this
@@ -172,8 +314,12 @@ void saveScreenCap(VkDevice device, VkCommandBuffer cmd, VkQueue queue, VkImage 
 		}
 	}
 	stbi_write_jpg(path, extent.width, extent.height, 4, data, 100);
+#ifdef __USE__VMA__
 
+	
+#else
 	vkUnmapMemory(device, dstImage.memory);
+#endif
 
 	cleanupImage(device, dstImage);
 

@@ -26,11 +26,10 @@ struct PassConstants {
 	Light Lights[MaxLights];
 };
 
-
 struct Vertex {
 	glm::vec3 Pos;
 	glm::vec3 Normal;
-	static VkVertexInputBindingDescription& getInputBindingDescription() {
+	/*static VkVertexInputBindingDescription& getInputBindingDescription() {
 		static VkVertexInputBindingDescription bindingDescription = { 0,sizeof(Vertex),VK_VERTEX_INPUT_RATE_VERTEX };
 		return bindingDescription;
 	}
@@ -40,26 +39,16 @@ struct Vertex {
 			{1,0,VK_FORMAT_R32G32B32_SFLOAT,offsetof(Vertex,Normal)},
 		};
 		return attributeDescriptions;
-	}
+	}*/
 };
 
 struct FrameResource {
-	FrameResource(VkDevice device, VkPhysicalDeviceMemoryProperties memoryProperties, std::vector<VkDescriptorSet>& descriptorSets, uint32_t minAlignmentSize, uint32_t passCount, uint32_t objectCount, uint32_t materialCount, uint32_t waveVertCount);
+	FrameResource(PassConstants* pPCs, ObjectConstants* pOCs, MaterialConstants* pMats, Vertex* pWvs);
 	FrameResource(const FrameResource& rhs) = delete;
 	FrameResource& operator=(const FrameResource& rhs) = delete;
 	~FrameResource();
-
-	VkDevice device{ VK_NULL_HANDLE };
-	VkFence Fence{ VK_NULL_HANDLE };
-	Buffer PassCB;
-	Buffer ObjectCB;
-	Buffer MaterialCB;
-	Buffer WavesVB;
-
 	PassConstants* pPCs{ nullptr };
 	ObjectConstants* pOCs{ nullptr };
 	MaterialConstants* pMats{ nullptr };
 	Vertex* pWavesVB{ nullptr };
-
-
 };

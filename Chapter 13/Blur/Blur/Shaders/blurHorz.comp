@@ -1,0 +1,66 @@
+#version 450
+layout (local_size_x=256)in;
+layout (binding=0,rgba8) uniform readonly image2D inputImage;
+layout (binding=1,rgba8) uniform image2D resultImage;
+layout (binding=2) uniform BlurCB{
+	// We cannot have an array entry in a constant buffer that gets mapped onto
+	// root constants, so list each element.  
+	
+	int gBlurRadius;
+
+	// Support up to 11 blur weights.
+	float w0;
+	float w1;
+	float w2;
+	float w3;
+	float w4;
+	float w5;
+	float w6;
+	float w7;
+	float w8;
+	float w9;
+	float w10;
+};
+const int gMaxBlurRadius = 5;
+
+#define N 256
+#define CacheSize (N + 2*gMaxBlurRadius)
+shared vec4 gCache[CacheSize];
+
+void main(){
+	// Put in an array for each indexing.
+	float weights[11] = { w0, w1, w2, w3, w4, w5, w6, w7, w8, w9, w10 };
+
+	//
+	// Fill local thread storage to reduce bandwidth.  To blur 
+	// N pixels, we will need to load N + 2*BlurRadius pixels
+	// due to the blur radius.
+	//
+	ivec2 pixelPos = ivec2(gl_GlobalInvocationID.xy);
+	int localIndex = int(gl_LocalInvocationID.x);
+	for(int i=localIndex;i<CacheSize;i+=16){
+		gCache[i]=imageLoad(inputImage,pixelPos+ivec2(i-localIndex-gBlurRadius,0));
+	}
+	barrier();
+	
+	// Clamp out of bound samples that occur at image borders.
+	//gCache[groupThreadID.x+gBlurRadius] = gInput[min(dispatchThreadID.xy, gInput.Length.xy-1)];
+	//gCache[localIndex+gBlurRadius]=inputImage[min(pixelPos,inputImage.Length.xy-1)];
+	
+	
+	//float4 blurColor = float4(0, 0, 0, 0);
+	vec4 blurColor=vec4(0.0);
+	
+	for(int i = -gBlurRadius; i <= gBlurRadius; ++i)
+	{
+			//int k = groupThreadID.x + gBlurRadius + i;
+			int k = localIndex + gBlurRadius + i;
+		
+			blurColor += weights[i+gBlurRadius]*gCache[k];
+	}
+	
+	
+	
+	//gOutput[dispatchThreadID.xy] = blurColor;
+	imageStore(resultImage,pixelPos,blurColor);
+}

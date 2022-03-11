@@ -21,7 +21,7 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{bb79246b-093e-4a45-8c42-e925344560b9}</ProjectGuid>
+    <ProjectGuid>{31f1f3b7-569e-4a91-bcec-f9ccd228a965}</ProjectGuid>
     <RootNamespace>LandAndWaves</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
@@ -116,7 +116,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>D:\ThirdParty\glm;C:\VulkanSDK\1.2.182.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\APPS\CPP\Graf\Vulkan\IntroD3D-redo\ThirdParty\glm;D:\APPS\CPP\Graf\Vulkan\IntroD3D-redo\ThirdParty\vma\include;C:\VulkanSDK\1.2.182.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -133,7 +133,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>D:\ThirdParty\glm;C:\VulkanSDK\1.2.182.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\APPS\CPP\Graf\Vulkan\IntroD3D-redo\ThirdParty\glm;D:\APPS\CPP\Graf\Vulkan\IntroD3D-redo\ThirdParty\vma\include;C:\VulkanSDK\1.2.182.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -150,19 +150,22 @@
     <ClCompile Include="..\..\..\Common\MathHelper.cpp" />
     <ClCompile Include="..\..\..\Common\Vulkan.cpp" />
     <ClCompile Include="..\..\..\Common\VulkApp.cpp" />
+    <ClCompile Include="..\..\..\ThirdParty\spirv-reflect\spirv_reflect.cc" />
     <ClCompile Include="FrameResource.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="ShaderProgram.cpp" />
     <ClCompile Include="Waves.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\..\Common\Colors.h" />
     <ClInclude Include="..\..\..\Common\GameTimer.h" />
     <ClInclude Include="..\..\..\Common\GeometryGenerator.h" />
     <ClInclude Include="..\..\..\Common\MathHelper.h" />
     <ClInclude Include="..\..\..\Common\Vulkan.h" />
     <ClInclude Include="..\..\..\Common\VulkApp.h" />
-    <ClInclude Include="..\..\..\Common\VulkUtil.h" />
+    <ClInclude Include="..\..\..\ThirdParty\spirv-reflect\spirv_reflect.h" />
+    <ClInclude Include="..\..\..\ThirdParty\vma\include\vk_mem_alloc.h" />
     <ClInclude Include="FrameResource.h" />
+    <ClInclude Include="ShaderProgram.h" />
     <ClInclude Include="Waves.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

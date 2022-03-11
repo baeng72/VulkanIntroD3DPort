@@ -1,0 +1,24 @@
+#version 450
+layout(local_size_x=16,local_size_y=1)in;
+
+struct Data{
+	vec3 v1;
+	vec2 v2;
+};
+
+layout(set=0,binding=0) readonly buffer InputBufferA{
+	Data data[];
+}inputBufferA;
+layout(set=1,binding=0) readonly buffer InputBufferB{
+	Data data[];
+}inputBufferB;
+layout(set=2,binding=0) buffer writeonly OutputBuffer{
+	Data data[];
+}outputBuffer;
+
+
+void main(){
+	outputBuffer.data[gl_GlobalInvocationID.x].v1 = inputBufferA.data[gl_GlobalInvocationID.x].v1 + inputBufferB.data[gl_GlobalInvocationID.x].v1;	
+	outputBuffer.data[gl_GlobalInvocationID.x].v2 = inputBufferA.data[gl_GlobalInvocationID.x].v2 + inputBufferB.data[gl_GlobalInvocationID.x].v2;	
+	
+}

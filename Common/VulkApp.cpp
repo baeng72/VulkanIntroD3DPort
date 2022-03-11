@@ -42,7 +42,6 @@ float VulkApp::AspectRatio()const
 	return static_cast<float>(mClientWidth) / mClientHeight;
 }
 
-
 int VulkApp::Run()
 {
 	MSG msg = { 0 };
@@ -74,7 +73,7 @@ int VulkApp::Run()
 			}
 		}
 	}
-
+	vkDeviceWaitIdle(mDevice);
 	return (int)msg.wParam;
 }
 
@@ -95,9 +94,11 @@ bool VulkApp::Initialize()
 
 void VulkApp::OnResize()
 {
+	vkDeviceWaitIdle(mDevice);
 	DestroySwapchain();
 	CreateSwapchain();
 }
+
 
 LRESULT VulkApp::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -124,7 +125,7 @@ LRESULT VulkApp::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 		// Save the new client area dimensions.
 		mClientWidth = LOWORD(lParam);
 		mClientHeight = HIWORD(lParam);
-		if (mDevice!=VK_NULL_HANDLE)
+		if (mDevice != VK_NULL_HANDLE)
 		{
 			if (wParam == SIZE_MINIMIZED)
 			{
@@ -230,11 +231,12 @@ LRESULT VulkApp::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 		else if ((int)wParam == VK_F2)
 			//Set4xMsaaState(!m4xMsaaState);
 
-		return 0;
+			return 0;
 	}
 
 	return DefWindowProc(hwnd, msg, wParam, lParam);
 }
+
 
 bool VulkApp::InitMainWindow()
 {
@@ -278,10 +280,10 @@ bool VulkApp::InitMainWindow()
 
 
 bool VulkApp::InitVulkan() {
-	std::vector<const char*> requiredExtensions{ "VK_KHR_surface",VK_KHR_WIN32_SURFACE_EXTENSION_NAME};
+	std::vector<const char*> requiredExtensions{ "VK_KHR_surface",VK_KHR_WIN32_SURFACE_EXTENSION_NAME };
 	std::vector<const char*> requiredLayers{ "VK_LAYER_KHRONOS_validation" };
-	mInstance = initInstance(requiredExtensions, requiredLayers);
-	mSurface = initSurface(mInstance, mhAppInst, mhMainWnd);
+	mInstance = Vulkan::initInstance(requiredExtensions, requiredLayers);
+	mSurface = Vulkan::initSurface(mInstance, mhAppInst, mhMainWnd);
 	mPhysicalDevice = choosePhysicalDevice(mInstance, mSurface, mQueues);
 	vkGetPhysicalDeviceProperties(mPhysicalDevice, &mDeviceProperties);
 	vkGetPhysicalDeviceMemoryProperties(mPhysicalDevice, &mMemoryProperties);
@@ -295,37 +297,51 @@ bool VulkApp::InitVulkan() {
 	vkGetPhysicalDeviceSurfacePresentModesKHR(mPhysicalDevice, mSurface, &presentModeCount, nullptr);
 	mPresentModes.resize(presentModeCount);
 	vkGetPhysicalDeviceSurfacePresentModesKHR(mPhysicalDevice, mSurface, &presentModeCount, mPresentModes.data());
-	
-	mNumSamples = getMaxUsableSampleCount(mDeviceProperties);
+
+	mNumSamples = Vulkan::getMaxUsableSampleCount(mDeviceProperties);
 	std::vector<const char*> deviceExtensions{ "VK_KHR_swapchain" };
 	VkPhysicalDeviceFeatures enabledFeatures{};
 	if (mDeviceFeatures.samplerAnisotropy)
 		enabledFeatures.samplerAnisotropy = VK_TRUE;
 	if (mDeviceFeatures.sampleRateShading)
 		enabledFeatures.sampleRateShading = VK_TRUE;
-	
+
 	if (mGeometryShader && mDeviceFeatures.geometryShader)
 		enabledFeatures.geometryShader = VK_TRUE;
 	if (mAllowWireframe && mDeviceFeatures.fillModeNonSolid) {
 		enabledFeatures.fillModeNonSolid = VK_TRUE;
 	}
-	mDevice = initDevice(mPhysicalDevice, deviceExtensions, mQueues, enabledFeatures);
 
-	mGraphicsQueue = getDeviceQueue(mDevice, mQueues.graphicsQueueFamily);
-	mPresentQueue = getDeviceQueue(mDevice, mQueues.presentQueueFamily);
-	mComputeQueue = getDeviceQueue(mDevice, mQueues.computeQueueFamily);
+	uint32_t queueCount = 2;
+	mDevice = initDevice(mPhysicalDevice, deviceExtensions, mQueues, enabledFeatures,queueCount);
 
-	mPresentMode = chooseSwapchainPresentMode(mPresentModes);
-	mSwapchainFormat = chooseSwapchainFormat(mSurfaceFormats);
+	mGraphicsQueue = Vulkan::getDeviceQueue(mDevice, mQueues.graphicsQueueFamily);
+	mPresentQueue = Vulkan::getDeviceQueue(mDevice, mQueues.presentQueueFamily);
+	mComputeQueue = Vulkan::getDeviceQueue(mDevice, mQueues.computeQueueFamily);
+
+	mBackQueue = Vulkan::getDeviceQueue(mDevice, mQueues.graphicsQueueFamily, 1);
+
+
+	mPresentMode = Vulkan::chooseSwapchainPresentMode(mPresentModes);
+	mSwapchainFormat = Vulkan::chooseSwapchainFormat(mSurfaceFormats);
 	vkGetPhysicalDeviceFormatProperties(mPhysicalDevice, mSwapchainFormat.format, &mFormatProperties);
-	uint32_t swapChainImageCount = getSwapchainImageCount(mSurfaceCaps);
-	mPresentComplete = initSemaphore(mDevice);
-	mRenderComplete = initSemaphore(mDevice);
-	mCommandPool = initCommandPool(mDevice, mQueues.graphicsQueueFamily);
-	mCommandBuffer = initCommandBuffer(mDevice, mCommandPool);
+	uint32_t swapChainImageCount = Vulkan::getSwapchainImageCount(mSurfaceCaps);
+	//mPresentComplete = Vulkan::initSemaphore(mDevice);
+	//mRenderComplete = Vulkan::initSemaphore(mDevice);
+	mMaxFrames = swapChainImageCount;
+	for (uint32_t i = 0; i < swapChainImageCount; i++) {
+		VkSemaphore presentComplete = Vulkan::initSemaphore(mDevice);
+		mPresentCompletes.push_back(presentComplete);
+		VkSemaphore renderComplete = Vulkan::initSemaphore(mDevice);
+		mRenderCompletes.push_back(renderComplete);
+		VkFence fence = Vulkan::initFence(mDevice, VK_FENCE_CREATE_SIGNALED_BIT);
+		mFences.push_back(fence);
+	}
+	mCommandPool = Vulkan::initCommandPool(mDevice, mQueues.graphicsQueueFamily);
+	mCommandBuffer = Vulkan::initCommandBuffer(mDevice, mCommandPool);
 
-	initCommandPools(mDevice, swapChainImageCount, mQueues.graphicsQueueFamily, mCommandPools);
-	initCommandBuffers(mDevice, mCommandPools, mCommandBuffers);
+	Vulkan::initCommandPools(mDevice, swapChainImageCount, mQueues.graphicsQueueFamily, mCommandPools);
+	Vulkan::initCommandBuffers(mDevice, mCommandPools, mCommandBuffers);
 	VkDevice device = mDevice;
 	pvkAcquireNextImage = (PFN_vkAcquireNextImageKHR)vkGetDeviceProcAddr(device, "vkAcquireNextImageKHR");
 	assert(pvkAcquireNextImage);
@@ -353,20 +369,22 @@ bool VulkApp::InitVulkan() {
 	assert(pvkQueueWaitIdle);
 	pvkCmdBindDescriptorSets = (PFN_vkCmdBindDescriptorSets)vkGetDeviceProcAddr(device, "vkCmdBindDescriptorSets");
 	assert(pvkCmdBindDescriptorSets);
+	pvkCmdDispatch = (PFN_vkCmdDispatch)vkGetDeviceProcAddr(device, "vkCmdDispatch");
+	assert(pvkCmdDispatch);
 	pvkCmdSetViewport = (PFN_vkCmdSetViewport)vkGetDeviceProcAddr(device, "vkCmdSetViewport");
 	assert(pvkCmdSetViewport);
 	pvkCmdSetScissor = (PFN_vkCmdSetScissor)vkGetDeviceProcAddr(device, "vkCmdSetScissor");
 	mSubmitInfo.pWaitDstStageMask = &mSubmitPipelineStages;
 	mSubmitInfo.waitSemaphoreCount = 1;
-	mSubmitInfo.pWaitSemaphores = &mPresentComplete;
+	//mSubmitInfo.pWaitSemaphores = &mPresentComplete;
 	mSubmitInfo.signalSemaphoreCount = 1;
-	mSubmitInfo.pSignalSemaphores = &mRenderComplete;
+	//mSubmitInfo.pSignalSemaphores = &mRenderComplete;
 	mSubmitInfo.commandBufferCount = 1;
 	mRenderPassBeginInfo.clearValueCount = sizeof(mClearValues) / sizeof(mClearValues[0]);
 	mRenderPassBeginInfo.pClearValues = mClearValues;
 	mPresentInfo.swapchainCount = 1;
 	mPresentInfo.pImageIndices = &mIndex;
-	mPresentInfo.pWaitSemaphores = &mRenderComplete;
+	//mPresentInfo.pWaitSemaphores = &mRenderComplete;
 	mPresentInfo.waitSemaphoreCount = 1;
 	return true;
 }
@@ -374,54 +392,76 @@ bool VulkApp::InitVulkan() {
 
 
 void VulkApp::cleanupVulkan() {
+	vkDeviceWaitIdle(mDevice);
 	DestroySwapchain();
-	cleanupSwapchain(mDevice, mSwapchain);
-	cleanupCommandBuffers(mDevice, mCommandPools, mCommandBuffers);
-	cleanupCommandPools(mDevice, mCommandPools);
-	cleanupCommandBuffer(mDevice,mCommandPool, mCommandBuffer);
-	cleanupCommandPool(mDevice, mCommandPool);
+	Vulkan::cleanupSwapchain(mDevice, mSwapchain);
+	Vulkan::cleanupCommandBuffers(mDevice, mCommandPools, mCommandBuffers);
+	Vulkan::cleanupCommandPools(mDevice, mCommandPools);
+	Vulkan::cleanupCommandBuffer(mDevice, mCommandPool, mCommandBuffer);
+	Vulkan::cleanupCommandPool(mDevice, mCommandPool);
 
-	cleanupSemaphore(mDevice,mRenderComplete);
-	cleanupSemaphore(mDevice,mPresentComplete);
-	cleanupDevice(mDevice);
-	cleanupSurface(mInstance, mSurface);
-	cleanupInstance(mInstance);
+	//Vulkan::cleanupSemaphore(mDevice, mRenderComplete);
+	//Vulkan::cleanupSemaphore(mDevice, mPresentComplete);
+	for (uint32_t i = 0;i < mMaxFrames; i++) {
+		Vulkan::cleanupSemaphore(mDevice, mPresentCompletes[i]);
+		Vulkan::cleanupSemaphore(mDevice, mRenderCompletes[i]);
+		Vulkan::cleanupFence(mDevice, mFences[i]);
+	}
+	Vulkan::cleanupDevice(mDevice);
+	Vulkan::cleanupSurface(mInstance, mSurface);
+	Vulkan::cleanupInstance(mInstance);
 }
 
 void VulkApp::CreateSwapchain() {
 	VkSwapchainKHR oldSwapchain = mSwapchain;
-	
-	mSwapchain = initSwapchain(mDevice, mSurface, mClientWidth, mClientHeight, mSurfaceCaps, mPresentMode, mSwapchainFormat, mSwapchainExtent,oldSwapchain);
+
+	mSwapchain = Vulkan::initSwapchain(mDevice, mSurface, mClientWidth, mClientHeight, mSurfaceCaps, mPresentMode, mSwapchainFormat, mSwapchainExtent,UINT32_MAX, oldSwapchain);
 	if (oldSwapchain != VK_NULL_HANDLE) {
-		cleanupSwapchain(mDevice, oldSwapchain);
+		Vulkan::cleanupSwapchain(mDevice, oldSwapchain);
 	}
-	getSwapchainImages(mDevice, mSwapchain, mSwapchainImages);
-	initSwapchainImageViews(mDevice, mSwapchainImages, mSwapchainFormat.format, mSwapchainImageViews);
-	
-	if (mDepthBuffer) {
-		initDepthImage(mDevice, mDepthFormat, mFormatProperties, mMemoryProperties, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mMSAA? mNumSamples : VK_SAMPLE_COUNT_1_BIT, mClientWidth, mClientHeight, mDepthImage);
-	}
+	Vulkan::getSwapchainImages(mDevice, mSwapchain, mSwapchainImages);
+	Vulkan::initSwapchainImageViews(mDevice, mSwapchainImages, mSwapchainFormat.format, mSwapchainImageViews);
+	VkSampleCountFlagBits numSamples = VK_SAMPLE_COUNT_1_BIT;
+	Vulkan::ImageProperties props;
+	props.width = mClientWidth;
+	props.height = mClientHeight;
+	numSamples = mNumSamples;
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.samples = numSamples;
 	if (mMSAA) {
-		initMSAAImage(mDevice, mSwapchainFormat.format, mFormatProperties, mMemoryProperties, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mClientWidth, mClientHeight, mNumSamples, mMsaaImage);
-		if (mDepthBuffer) {
-			mRenderPass = initMSAARenderPass(mDevice, mSwapchainFormat.format, mDepthFormat, mNumSamples);
-			initMSAAFramebuffers(mDevice, mRenderPass, mSwapchainImageViews, mDepthImage.imageView, mMsaaImage.imageView, mClientWidth, mClientHeight, mFramebuffers);
-		}
-		else {
-			mRenderPass = initMSAARenderPass(mDevice, mSwapchainFormat.format, mNumSamples);
-			initMSAAFramebuffers(mDevice, mRenderPass, mSwapchainImageViews, mMsaaImage.imageView, mClientWidth, mClientHeight, mFramebuffers);
-		}
+
+		props.format = mSwapchainFormat.format;
+		props.imageUsage = (VkImageUsageFlagBits)(VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+		Vulkan::initImage(mDevice, mMemoryProperties, props, mMsaaImage);
 	}
-	else {
-		if (mDepthBuffer) {
-			mRenderPass = initRenderPass(mDevice, mSwapchainFormat.format, mDepthFormat);
-			initFramebuffers(mDevice, mRenderPass, mSwapchainImageViews, mDepthImage.imageView, mClientWidth, mClientHeight, mFramebuffers);
-		}
-		else {
-			mRenderPass = initRenderPass(mDevice, mSwapchainFormat.format);
-			initFramebuffers(mDevice, mRenderPass, mSwapchainImageViews, mClientWidth, mClientHeight, mFramebuffers);
-		}
+	if (mDepthBuffer) {
+		props.format = mDepthFormat;
+		props.samples = VK_SAMPLE_COUNT_1_BIT;
+		props.imageUsage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | mDepthImageUsage;
+		props.aspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+		Vulkan::initImage(mDevice, mMemoryProperties, props, mDepthImage);
+
+		//Vulkan::initDepthImage(mDevice, mDepthFormat, mFormatProperties, mMemoryProperties, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mMSAA ? mNumSamples : VK_SAMPLE_COUNT_1_BIT, mClientWidth, mClientHeight, mDepthImage);
 	}
+	props.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+	//setup render pass based on config
+	Vulkan::RenderPassProperties rpProps;
+	rpProps.colorFormat = mSwapchainFormat.format;
+	rpProps.sampleCount = mMSAA ? numSamples : VK_SAMPLE_COUNT_1_BIT;
+	rpProps.depthFormat = mDepthBuffer ? mDepthFormat : VK_FORMAT_UNDEFINED;
+	rpProps.resolveFormat = mMSAA ? rpProps.colorFormat : VK_FORMAT_UNDEFINED;
+	mRenderPass = Vulkan::initRenderPass(mDevice, rpProps);
+	Vulkan::FramebufferProperties fbProps;
+	fbProps.colorAttachments = mSwapchainImageViews;
+	fbProps.depthAttachment = mDepthBuffer ? mDepthImage.imageView : VK_NULL_HANDLE;
+	fbProps.resolveAttachment = mMSAA ? mMsaaImage.imageView : VK_NULL_HANDLE;
+	fbProps.width = mClientWidth;
+	fbProps.height = mClientHeight;
+	Vulkan::initFramebuffers(mDevice, mRenderPass, fbProps, mFramebuffers);
 	mRenderPassBeginInfo.renderPass = mRenderPass;
 	mRenderPassBeginInfo.renderArea = { 0,0,(uint32_t)mClientWidth,(uint32_t)mClientHeight };
 
@@ -429,18 +469,28 @@ void VulkApp::CreateSwapchain() {
 }
 
 void VulkApp::DestroySwapchain() {
-	cleanupFramebuffers(mDevice, mFramebuffers);
+	Vulkan::cleanupFramebuffers(mDevice, mFramebuffers);
 	if (mMsaaImage.image != VK_NULL_HANDLE)
-		cleanupImage(mDevice, mMsaaImage);
+		Vulkan::cleanupImage(mDevice, mMsaaImage);
 	if (mDepthImage.image != VK_NULL_HANDLE)
-		cleanupImage(mDevice, mDepthImage);
-	cleanupRenderPass(mDevice, mRenderPass);
-	cleanupSwapchainImageViews(mDevice, mSwapchainImageViews);
+		Vulkan::cleanupImage(mDevice, mDepthImage);
+	Vulkan::cleanupRenderPass(mDevice, mRenderPass);
+	Vulkan::cleanupSwapchainImageViews(mDevice, mSwapchainImageViews);
 	//cleanupSwapchain(mDevice, mSwapchain);
 }
 
-VkCommandBuffer VulkApp::BeginRender() {
-	VkResult res = pvkAcquireNextImage(mDevice, mSwapchain, UINT64_MAX, mPresentComplete, nullptr, &mIndex);
+VkCommandBuffer VulkApp::BeginRender(bool startRenderPass) {
+	
+	
+	mSubmitInfo.pWaitSemaphores = &mPresentCompletes[mCurrFrame];
+	mSubmitInfo.pSignalSemaphores = &mRenderCompletes[mCurrFrame];
+	
+	mRenderPassBeginInfo.clearValueCount = sizeof(mClearValues) / sizeof(mClearValues[0]);
+	mRenderPassBeginInfo.pClearValues = mClearValues;
+	mPresentInfo.swapchainCount = 1;
+	mPresentInfo.pImageIndices = &mIndex;
+	mPresentInfo.pWaitSemaphores = &mRenderCompletes[mCurrFrame];
+	VkResult res = pvkAcquireNextImage(mDevice, mSwapchain, UINT64_MAX, mPresentCompletes[mCurrFrame], nullptr, &mIndex);
 	assert(res == VK_SUCCESS);
 
 
@@ -451,20 +501,21 @@ VkCommandBuffer VulkApp::BeginRender() {
 
 
 	mRenderPassBeginInfo.framebuffer = mFramebuffers[mIndex];
-	pvkCmdBeginRenderPass(cmd, &mRenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+	if(startRenderPass)
+		pvkCmdBeginRenderPass(cmd, &mRenderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 	return cmd;
 }
 
-void VulkApp::EndRender(VkCommandBuffer cmd,VkFence fence) {
+void VulkApp::EndRender(VkCommandBuffer cmd) {
 	pvkCmdEndRenderPass(cmd);
 
 
 	VkResult res = pvkEndCommandBuffer(cmd);
 	assert(res == VK_SUCCESS);
-
+	VkFence fence = mFences[mCurrFrame];
 	mSubmitInfo.pCommandBuffers = &cmd;
-	res = pvkQueueSubmit(mGraphicsQueue, 1, &mSubmitInfo, fence);
+	res = pvkQueueSubmit(mGraphicsQueue, 1, &mSubmitInfo, mCurrFence);
 	assert(res == VK_SUCCESS);
 
 	res = pvkQueuePresent(mPresentQueue, &mPresentInfo);
@@ -473,6 +524,12 @@ void VulkApp::EndRender(VkCommandBuffer cmd,VkFence fence) {
 	mFrameCount++;
 }
 
+void VulkApp::Update(const GameTimer& gt) {
+	mCurrFrame = (mCurrFrame + 1) % mMaxFrames;
+	mCurrFence = mFences[mCurrFrame];
+	vkWaitForFences(mDevice, 1, &mCurrFence, VK_TRUE, UINT64_MAX);
+	vkResetFences(mDevice, 1, &mCurrFence);
+}
 
 void VulkApp::CalculateFrameStats()
 {

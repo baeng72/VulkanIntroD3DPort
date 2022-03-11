@@ -27,7 +27,7 @@ float MathHelper::AngleFromXY(float x, float y)
 
 glm::vec3 MathHelper::RandUnitVec3()
 {
-	
+
 
 	// Keep trying until we get a point on/in the hemisphere.
 	while (true)
@@ -38,8 +38,8 @@ glm::vec3 MathHelper::RandUnitVec3()
 		// Ignore points outside the unit sphere in order to get an even distribution 
 		// over the unit sphere.  Otherwise points will clump more on the sphere near 
 		// the corners of the cube.
-		float dot = glm::dot(v,v);
-		if(dot>1.0f)
+		float dot = glm::dot(v, v);
+		if (dot > 1.0f)
 			continue;
 
 		return glm::normalize(v);
@@ -48,7 +48,7 @@ glm::vec3 MathHelper::RandUnitVec3()
 
 glm::vec3 MathHelper::RandHemisphereUnitVec3(glm::vec3 n)
 {
-	
+
 	// Keep trying until we get a point on/in the hemisphere.
 	while (true)
 	{
@@ -58,19 +58,19 @@ glm::vec3 MathHelper::RandHemisphereUnitVec3(glm::vec3 n)
 		// Ignore points outside the unit sphere in order to get an even distribution 
 		// over the unit sphere.  Otherwise points will clump more on the sphere near 
 		// the corners of the cube.
-		float dot = glm::dot(v,v);
-		if(dot>1.0f)
-		
+		float dot = glm::dot(v, v);
+		if (dot > 1.0f)
+
 			continue;
 
 		// Ignore points in the bottom hemisphere.
-		if(dot<0.0f)
-		
+		if (dot < 0.0f)
+
 			continue;
 
 		return glm::normalize(v);
 	}
-	
+
 }
 
 glm::mat4 MathHelper::reflect(glm::vec4 plane) {
@@ -83,4 +83,24 @@ glm::mat4 MathHelper::reflect(glm::vec4 plane) {
 	m[2][2] += P[2] * S[2];
 	m[3][3] += P[3] * S[3];
 	return m;
+}
+
+glm::vec3 MathHelper::vectorMin(glm::vec3& a, glm::vec3& b) {
+	glm::vec3 res = {
+
+		{std::min(a.x,b.x)},
+		{std::min(a.y,b.y)},
+		{std::min(a.z,b.z)}
+	};
+	return res;
+}
+
+glm::vec3 MathHelper::vectorMax(glm::vec3& a, glm::vec3& b) {
+	glm::vec3 res = {
+
+		{std::max(a.x,b.x)},
+		{std::max(a.y,b.y)},
+		{std::max(a.z,b.z)}
+	};
+	return res;
 }

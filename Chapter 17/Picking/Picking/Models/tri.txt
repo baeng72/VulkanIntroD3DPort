@@ -1,0 +1,12 @@
+VertexCount: 3
+TriangleCount: 1
+VertexList (pos, normal)
+{
+	-1 -1 0 0 0 -1
+	1 -1 0 0 0 -1
+	1 1 0 0 0 -1
+}
+TriangleList
+{
+	1 0 2
+}

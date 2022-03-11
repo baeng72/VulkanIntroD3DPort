@@ -18,26 +18,10 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="..\..\..\Common\Colors.h" />
-    <ClInclude Include="..\..\..\Common\GameTimer.h" />
-    <ClInclude Include="..\..\..\Common\MathHelper.h" />
-    <ClInclude Include="..\..\..\Common\vulkan.h" />
-    <ClInclude Include="..\..\..\Common\VulkApp.h" />
-    <ClInclude Include="..\..\..\Common\VulkUtil.h" />
-    <ClInclude Include="MathHelper.h" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="..\..\..\Common\GameTimer.cpp" />
-    <ClCompile Include="..\..\..\Common\MathHelper.cpp" />
-    <ClCompile Include="..\..\..\Common\vulkan.cpp" />
-    <ClCompile Include="..\..\..\Common\VulkApp.cpp" />
-    <ClCompile Include="main.cpp" />
-  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{fcbc5951-d591-41a6-ab00-d35e230bd33b}</ProjectGuid>
+    <ProjectGuid>{75a7f34b-523a-4e6c-8dd2-4485ffe76caa}</ProjectGuid>
     <RootNamespace>Box</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
@@ -132,7 +116,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>D:\ThirdParty\glm;D:\ThirdParty\stb-master\stb-master;C:\VulkanSDK\1.2.182.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\APPS\CPP\Graf\Vulkan\IntroD3D-redo\ThirdParty\vma\include;D:\APPS\CPP\Graf\Vulkan\IntroD3D-redo\ThirdParty\stb;D:\APPS\CPP\Graf\Vulkan\IntroD3D-redo\ThirdParty\glm;C:\VulkanSDK\1.2.182.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -149,7 +133,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>D:\ThirdParty\glm;D:\ThirdParty\stb-master\stb-master;C:\VulkanSDK\1.2.182.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>D:\APPS\CPP\Graf\Vulkan\IntroD3D-redo\ThirdParty\vma\include;D:\APPS\CPP\Graf\Vulkan\IntroD3D-redo\ThirdParty\stb;D:\APPS\CPP\Graf\Vulkan\IntroD3D-redo\ThirdParty\glm;C:\VulkanSDK\1.2.182.0\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -160,6 +144,26 @@
       <AdditionalDependencies>vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="..\..\..\Common\GameTimer.cpp" />
+    <ClCompile Include="..\..\..\Common\MathHelper.cpp" />
+    <ClCompile Include="..\..\..\Common\TextureLoader.cpp" />
+    <ClCompile Include="..\..\..\Common\Vulkan.cpp" />
+    <ClCompile Include="..\..\..\Common\VulkanEx.cpp" />
+    <ClCompile Include="..\..\..\Common\VulkApp.cpp" />
+    <ClCompile Include="..\..\..\ThirdParty\spirv-reflect\spirv_reflect.cc" />
+    <ClCompile Include="main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\..\Common\Colors.h" />
+    <ClInclude Include="..\..\..\Common\GameTimer.h" />
+    <ClInclude Include="..\..\..\Common\MathHelper.h" />
+    <ClInclude Include="..\..\..\Common\Vulkan.h" />
+    <ClInclude Include="..\..\..\Common\VulkanEx.h" />
+    <ClInclude Include="..\..\..\Common\VulkApp.h" />
+    <ClInclude Include="..\..\..\Common\VulkUtil.h" />
+    <ClInclude Include="..\..\..\ThirdParty\spirv-reflect\spirv_reflect.h" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

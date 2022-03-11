@@ -1,6 +1,7 @@
 
 #pragma once
 #include "../../../Common/Vulkan.h"
+
 #include <glm/glm.hpp>
 
 struct ObjectConstants {
@@ -25,34 +26,14 @@ struct PassConstants
 	float DeltaTime = 0.0f;
 };
 
-struct Vertex {
-	glm::vec3 Pos;
-	glm::vec4 Color;
-	static VkVertexInputBindingDescription& getInputBindingDescription() {
-		static VkVertexInputBindingDescription bindingDescription = { 0,sizeof(Vertex),VK_VERTEX_INPUT_RATE_VERTEX };
-		return bindingDescription;
-	}
-	static std::vector<VkVertexInputAttributeDescription>& getInputAttributeDescription() {
-		static std::vector<VkVertexInputAttributeDescription> attributeDescriptions = {
-			{0,0,VK_FORMAT_R32G32B32_SFLOAT,offsetof(Vertex,Pos)},
-			{1,0,VK_FORMAT_R32G32B32A32_SFLOAT,offsetof(Vertex,Color)},
-		};
-		return attributeDescriptions;
-	}
-};
 
-
-struct FrameResource {
-	FrameResource(VkDevice device, VkPhysicalDeviceMemoryProperties memoryProperties, VkDescriptorSet descriptorSetPC,VkDescriptorSet descriptorSetOBs,uint32_t minAlignmentSize, uint32_t passCount, uint32_t objectCount);
+struct FrameResource {	
+	FrameResource(PassConstants*pc,ObjectConstants*oc);
 	FrameResource(const FrameResource& rhs) = delete;
 	FrameResource& operator=(const FrameResource& rhs) = delete;
 	~FrameResource();
-	VkDevice device{ VK_NULL_HANDLE };
 	
-	VkFence Fence{ VK_NULL_HANDLE };
-	Buffer	PassCB;
-	Buffer	ObjectCB;
 	PassConstants* pPCs{ nullptr };
 	ObjectConstants* pOCs{ nullptr };
-	VkDeviceSize ObjectCBSize{ 0 };
+	
 };

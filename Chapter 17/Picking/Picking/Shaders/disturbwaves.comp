@@ -1,0 +1,63 @@
+#version 450
+layout (local_size_x=1, local_size_y=1)in;
+
+//cbuffer cbUpdateSettings
+//{
+//	float gWaveConstant0;
+//	float gWaveConstant1;
+//	float gWaveConstant2;
+//	float gDisturbMag;
+//	int2 gDisturbIndex;
+//};
+
+layout (set=0,binding=0) uniform UpdateSettings{
+	float gWaveConstant0;
+	float gWaveConstant1;
+	float gWaveConstant2;
+	float gDisturbMag;
+	ivec2 gDisturbIndex;
+}updateSettings;
+
+layout (set=1,binding=0,r32f) uniform readonly image2D gPrevSolInput;
+layout (set=1,binding=1,r32f) uniform image2D gCurrSolInput;
+layout (set=1,binding=2,r32f) uniform image2D gOutput;
+
+
+void main(){
+	int x = updateSettings.gDisturbIndex.x;
+	int y = updateSettings.gDisturbIndex.y;
+	
+	float halfMag = 0.5f*updateSettings.gDisturbMag;
+	// Buffer is RW so operator += is well defined.
+	//float f = imageLoad(gOutput,ivec2(x,y)).r;
+	float f = imageLoad(gCurrSolInput,ivec2(x,y)).r;
+	f+=updateSettings.gDisturbMag;	
+	//imageStore(gOutput,ivec2(x,y),vec4(f,0,0,0));
+	imageStore(gCurrSolInput,ivec2(x,y),vec4(f,0,0,0));
+	
+	//f = imageLoad(gOutput,ivec2(x+1,y)).r;
+	f = imageLoad(gCurrSolInput,ivec2(x+1,y)).r;
+	f+=updateSettings.gDisturbMag;	
+	//imageStore(gOutput,ivec2(x+1,y),vec4(f,0,0,0));
+	imageStore(gCurrSolInput,ivec2(x+1,y),vec4(f,0,0,0));
+	
+	//f = imageLoad(gOutput,ivec2(x-1,y)).r;
+	f = imageLoad(gCurrSolInput,ivec2(x-1,y)).r;
+	f+=updateSettings.gDisturbMag;	
+	//imageStore(gOutput,ivec2(x-1,y),vec4(f,0,0,0));
+	imageStore(gCurrSolInput,ivec2(x-1,y),vec4(f,0,0,0));
+	
+	//f = imageLoad(gOutput,ivec2(x,y+1)).r;
+	f = imageLoad(gCurrSolInput,ivec2(x,y+1)).r;
+	f+=updateSettings.gDisturbMag;	
+	//imageStore(gOutput,ivec2(x,y+1),vec4(f,0,0,0));
+	imageStore(gCurrSolInput,ivec2(x,y+1),vec4(f,0,0,0));
+	
+	//f = imageLoad(gOutput,ivec2(x,y-1)).r;
+	f = imageLoad(gCurrSolInput,ivec2(x,y-1)).r;
+	f+=updateSettings.gDisturbMag;	
+	//imageStore(gOutput,ivec2(x,y-1),vec4(f,0,0,0));
+	imageStore(gCurrSolInput,ivec2(x,y-1),vec4(f,0,0,0));
+	
+	
+}

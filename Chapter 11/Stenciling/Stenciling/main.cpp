@@ -4,7 +4,7 @@
 #include "../../../Common/MathHelper.h"
 #include "../../../Common/Colors.h"
 #include "../../../Common/TextureLoader.h"
-#include "FrameResource.h"
+
 
 #include <array>
 #include <memory>
@@ -15,7 +15,16 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#include "FrameResource.h"
+//#include "ShaderProgram.h"
+
+//#include "vk_descriptors.h"
+
+#include "temp.h"
+
 const int gNumFrameResources = 3;
+
+
 
 struct RenderItem {
 	RenderItem() = default;
@@ -50,24 +59,35 @@ enum class RenderLayer : int
 	Count
 };
 
-const float pi = 3.14159265358979323846264338327950288f;
 
 class StencilApp : public VulkApp {
 	std::vector<std::unique_ptr<FrameResource>> mFrameResources;
 	FrameResource* mCurrFrameResource = nullptr;
 	int mCurrFrameResourceIndex = 0;
 
-	VkDescriptorSetLayout	mDescriptorSetLayoutPC{ VK_NULL_HANDLE };
-	VkDescriptorSetLayout	mDescriptorSetLayoutOBs{ VK_NULL_HANDLE };
-	VkDescriptorSetLayout  mDescriptorSetLayoutMats{ VK_NULL_HANDLE };
-	VkDescriptorSetLayout mDescriptorSetLayoutTextures{ VK_NULL_HANDLE };
-	VkDescriptorPool		mDescriptorPool{ VK_NULL_HANDLE };
-	VkDescriptorPool		mDescriptorPoolTexture{ VK_NULL_HANDLE };
-	std::vector<VkDescriptorSet> mDescriptorSetsPC;
-	std::vector<VkDescriptorSet> mDescriptorSetsOBs;
-	std::vector<VkDescriptorSet> mDescriptorSetsMats;
-	std::vector<VkDescriptorSet> mDescriptorSetsTextures;
-	VkPipelineLayout		mPipelineLayout{ VK_NULL_HANDLE };
+	/*std::unique_ptr<ShaderResources> pipelineRes;
+	std::unique_ptr<ShaderProgram> prog;
+	std::unique_ptr<PipelineLayout> pipelineLayout;
+	std::unique_ptr<Pipeline> opaquePipeline;
+	std::unique_ptr<Pipeline> wireframePipeline;
+	std::unique_ptr<Pipeline> transparentPipeline;
+	std::unique_ptr<Pipeline> markStencilMirrorsPipeline;
+	std::unique_ptr<Pipeline> drawStencilReflectionsPipeline;
+	std::unique_ptr<Pipeline> shadowPipeline;*/
+
+	std::unique_ptr<DescriptorSetLayoutCache> descriptorSetLayoutCache;
+	std::unique_ptr<DescriptorSetPoolCache> descriptorSetPoolCache;	
+	std::unique_ptr<UniformBuffer> uniformBuffer;
+	std::unique_ptr<VulkanTextureList> textures;
+	std::unique_ptr<VulkanDescriptorList> uniformDescriptors;
+	std::unique_ptr<VulkanDescriptorList> textureDescriptors;
+	std::unique_ptr<VulkanPipelineLayout> pipelineLayout;
+	std::unique_ptr<VulkanPipeline> opaquePipeline;
+	std::unique_ptr<VulkanPipeline> wireframePipeline;
+	std::unique_ptr<VulkanPipeline> transparentPipeline;
+	std::unique_ptr<VulkanPipeline> markStencilMirrorsPipeline;
+	std::unique_ptr<VulkanPipeline> drawStencilReflectionsPipeline;
+	std::unique_ptr<VulkanPipeline> shadowPipeline;
 
 	std::unordered_map<std::string, std::unique_ptr<MeshGeometry>> mGeometries;
 	std::unordered_map < std::string, std::unique_ptr<Material>> mMaterials;
@@ -116,12 +136,10 @@ class StencilApp : public VulkApp {
 
 	void AnimateMaterials(const GameTimer& gt);
 	void UpdateMaterialsCBs(const GameTimer& gt);
-	
+
 	void UpdateReflectedPassCB(const GameTimer& gt);
 
 	void LoadTextures();
-	void BuildRootSignature();
-	void BuildDescriptorHeaps();
 	void BuildRoomGeometry();
 	void BuildSkullGeometry();
 	void BuildBoxGeometry();
@@ -137,6 +155,7 @@ public:
 	StencilApp& operator=(const StencilApp& rhs) = delete;
 	~StencilApp();
 	virtual bool Initialize()override;
+
 };
 
 StencilApp::StencilApp(HINSTANCE hInstance) :VulkApp(hInstance) {
@@ -146,34 +165,21 @@ StencilApp::StencilApp(HINSTANCE hInstance) :VulkApp(hInstance) {
 	mDepthFormat = VK_FORMAT_D32_SFLOAT_S8_UINT;//set stencil format
 }
 
+
 StencilApp::~StencilApp() {
 	vkDeviceWaitIdle(mDevice);
 	for (auto& pair : mGeometries) {
 		free(pair.second->indexBufferCPU);
 
 
-		
+
 		free(pair.second->vertexBufferCPU);
-		cleanupBuffer(mDevice, pair.second->vertexBufferGPU);
-		
+		Vulkan::cleanupBuffer(mDevice, pair.second->vertexBufferGPU);
 
-		cleanupBuffer(mDevice, pair.second->indexBufferGPU);
 
-	}
-	for (auto& pair : mPSOs) {
-		VkPipeline pipeline = pair.second;
-		cleanupPipeline(mDevice, pipeline);
-	}
-	for (auto& pair : mTextures) {
-		cleanupImage(mDevice, *pair.second);
-	}
-	cleanupPipelineLayout(mDevice, mPipelineLayout);
-	cleanupDescriptorPool(mDevice, mDescriptorPoolTexture);
-	cleanupDescriptorPool(mDevice, mDescriptorPool);
-	cleanupDescriptorSetLayout(mDevice, mDescriptorSetLayoutTextures);
-	cleanupDescriptorSetLayout(mDevice, mDescriptorSetLayoutMats);
-	cleanupDescriptorSetLayout(mDevice, mDescriptorSetLayoutOBs);
-	cleanupDescriptorSetLayout(mDevice, mDescriptorSetLayoutPC);
+		Vulkan::cleanupBuffer(mDevice, pair.second->indexBufferGPU);
+
+	}	
 }
 
 
@@ -181,85 +187,17 @@ bool StencilApp::Initialize() {
 	if (!VulkApp::Initialize())
 		return false;
 	LoadTextures();
-	BuildDescriptorHeaps();
-	BuildRoomGeometry();	
+	
+	BuildRoomGeometry();
 	BuildSkullGeometry();
 	BuildMaterials();
 	BuildRenderItems();
-	BuildRootSignature();
-
-	BuildFrameResources();
+	
 	BuildPSOs();
+	BuildFrameResources();
+	
 
 	return true;
-}
-
-void StencilApp::BuildDescriptorHeaps() {
-	std::vector<VkDescriptorSetLayoutBinding> bindings = {
-		{0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,1,VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,nullptr}, //Binding 0, uniform (constant) buffer
-
-	};
-	mDescriptorSetLayoutPC = initDescriptorSetLayout(mDevice, bindings);
-	mDescriptorSetLayoutOBs = initDescriptorSetLayout(mDevice, bindings);
-	mDescriptorSetLayoutMats = initDescriptorSetLayout(mDevice, bindings);
-
-	std::vector<VkDescriptorPoolSize> poolSizes{
-		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,9},
-	};
-	mDescriptorPool = initDescriptorPool(mDevice, poolSizes, 9);
-	uint32_t count = getSwapchainImageCount(mSurfaceCaps);
-	mDescriptorSetsPC.resize(count);
-	initDescriptorSets(mDevice, mDescriptorSetLayoutPC, mDescriptorPool, mDescriptorSetsPC.data(), count);
-	mDescriptorSetsOBs.resize(count);
-	initDescriptorSets(mDevice, mDescriptorSetLayoutOBs, mDescriptorPool, mDescriptorSetsOBs.data(), count);
-	mDescriptorSetsMats.resize(count);
-	initDescriptorSets(mDevice, mDescriptorSetLayoutOBs, mDescriptorPool, mDescriptorSetsMats.data(), count);
-
-	bindings = {
-		{0,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_FRAGMENT_BIT,nullptr}
-	};
-	uint32_t texCount = 4;
-	mDescriptorSetLayoutTextures = initDescriptorSetLayout(mDevice, bindings);
-	poolSizes = {
-		{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,texCount},
-	};
-	mDescriptorPoolTexture = initDescriptorPool(mDevice, poolSizes, texCount + 1);
-	mDescriptorSetsTextures.resize(texCount);
-	initDescriptorSets(mDevice, mDescriptorSetLayoutTextures, mDescriptorPoolTexture, mDescriptorSetsTextures.data(), texCount);
-
-
-	std::vector<VkDescriptorImageInfo> imageInfos(texCount);
-
-	std::vector<VkWriteDescriptorSet> descriptorWrites;
-	Texture* tex{ nullptr };
-	for (uint32_t i = 0; i < texCount; i++) {
-		imageInfos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-		switch (i) {
-		case 0:
-			tex = mTextures["bricksTex"].get();
-			break;
-		case 1:
-			tex = mTextures["checkboardTex"].get();
-			break;
-		case 2:
-			tex = mTextures["iceTex"].get();
-			break;
-		case 3:
-			tex = mTextures["white1x1Tex"].get();
-			break;
-		}
-		if (tex != nullptr) {
-			imageInfos[i].imageView = tex->imageView;
-			imageInfos[i].sampler = tex->sampler;
-
-			descriptorWrites.push_back(
-				{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,nullptr,mDescriptorSetsTextures[i],0,0,1,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,&imageInfos[i],nullptr,nullptr });
-
-		}
-
-
-	}
-	updateDescriptorSets(mDevice, descriptorWrites);
 }
 
 void StencilApp::BuildRoomGeometry()
@@ -331,19 +269,19 @@ void StencilApp::BuildRoomGeometry()
 	};
 
 	SubmeshGeometry floorSubmesh;
-	floorSubmesh.indexCount = 6;
-	floorSubmesh.startIndexLocation = 0;
-	floorSubmesh.baseVertexLocation = 0;
+	floorSubmesh.IndexCount = 6;
+	floorSubmesh.StartIndexLocation = 0;
+	floorSubmesh.BaseVertexLocation = 0;
 
 	SubmeshGeometry wallSubmesh;
-	wallSubmesh.indexCount = 18;
-	wallSubmesh.startIndexLocation = 6;
-	wallSubmesh.baseVertexLocation = 0;
+	wallSubmesh.IndexCount = 18;
+	wallSubmesh.StartIndexLocation = 6;
+	wallSubmesh.BaseVertexLocation = 0;
 
 	SubmeshGeometry mirrorSubmesh;
-	mirrorSubmesh.indexCount = 6;
-	mirrorSubmesh.startIndexLocation = 24;
-	mirrorSubmesh.baseVertexLocation = 0;
+	mirrorSubmesh.IndexCount = 6;
+	mirrorSubmesh.StartIndexLocation = 24;
+	mirrorSubmesh.BaseVertexLocation = 0;
 
 	const UINT vbByteSize = (UINT)vertices.size() * sizeof(Vertex);
 	const UINT ibByteSize = (UINT)indices.size() * sizeof(std::uint32_t);
@@ -357,20 +295,60 @@ void StencilApp::BuildRoomGeometry()
 	geo->indexBufferCPU = malloc(ibByteSize);
 	memcpy(geo->indexBufferCPU, indices.data(), ibByteSize);
 
-	initBuffer(mDevice, mMemoryProperties, vbByteSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->vertexBufferGPU);
-	initBuffer(mDevice, mMemoryProperties, ibByteSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->indexBufferGPU);
+	Vulkan::BufferProperties props;
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	props.size = vbByteSize;
+	Vulkan::initBuffer(mDevice, mMemoryProperties, props, geo->vertexBufferGPU);
+
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	props.size = ibByteSize;
+	Vulkan::initBuffer(mDevice, mMemoryProperties, props, geo->indexBufferGPU);
 
 	VkDeviceSize maxSize = std::max(vbByteSize, ibByteSize);
-	Buffer stagingBuffer;
-	initBuffer(mDevice, mMemoryProperties, maxSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer);
+	Vulkan::Buffer stagingBuffer;
+
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+	props.size = maxSize;
+	initBuffer(mDevice, mMemoryProperties, props, stagingBuffer);
 	void* ptr = mapBuffer(mDevice, stagingBuffer);
 	//copy vertex data
 	memcpy(ptr, vertices.data(), vbByteSize);
+
 	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->vertexBufferGPU, vbByteSize);
 	memcpy(ptr, indices.data(), ibByteSize);
 	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->indexBufferGPU, ibByteSize);
 	unmapBuffer(mDevice, stagingBuffer);
 	cleanupBuffer(mDevice, stagingBuffer);
+
+	//initBuffer(mDevice, mMemoryProperties, vbByteSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->vertexBufferGPU);
+	//initBuffer(mDevice, mMemoryProperties, ibByteSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->indexBufferGPU);
+
+	//VkDeviceSize maxSize = std::max(vbByteSize, ibByteSize);
+	//Buffer stagingBuffer;
+	//initBuffer(mDevice, mMemoryProperties, maxSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer);
+	//void* ptr = mapBuffer(mDevice, stagingBuffer);
+	////copy vertex data
+	//memcpy(ptr, vertices.data(), vbByteSize);
+	//CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->vertexBufferGPU, vbByteSize);
+	//memcpy(ptr, indices.data(), ibByteSize);
+	//CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->indexBufferGPU, ibByteSize);
+	//unmapBuffer(mDevice, stagingBuffer);
+	//cleanupBuffer(mDevice, stagingBuffer);
 
 	/*ThrowIfFailed(D3DCreateBlob(vbByteSize, &geo->VertexBufferCPU));
 	CopyMemory(geo->VertexBufferCPU->GetBufferPointer(), vertices.data(), vbByteSize);
@@ -384,9 +362,9 @@ void StencilApp::BuildRoomGeometry()
 	geo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
 		mCommandList.Get(), indices.data(), ibByteSize, geo->IndexBufferUploader);*/
 
-	geo->vertexByteStride = sizeof(Vertex);
-	geo->vertexBufferByteSize = vbByteSize;	
-	geo->indexBufferByteSize = ibByteSize;
+	geo->VertexByteStride = sizeof(Vertex);
+	geo->VertexBufferByteSize = vbByteSize;
+	geo->IndexBufferByteSize = ibByteSize;
 
 	geo->DrawArgs["floor"] = floorSubmesh;
 	geo->DrawArgs["wall"] = wallSubmesh;
@@ -395,8 +373,8 @@ void StencilApp::BuildRoomGeometry()
 	mGeometries[geo->Name] = std::move(geo);
 }
 
-void StencilApp::BuildSkullGeometry()
-{
+
+void StencilApp::BuildSkullGeometry() {
 	std::ifstream fin("Models/skull.txt");
 
 	if (!fin)
@@ -405,8 +383,8 @@ void StencilApp::BuildSkullGeometry()
 		return;
 	}
 
-	UINT vcount = 0;
-	UINT tcount = 0;
+	uint32_t vcount = 0;
+	uint32_t tcount = 0;
 	std::string ignore;
 
 	fin >> ignore >> vcount;
@@ -418,17 +396,14 @@ void StencilApp::BuildSkullGeometry()
 	{
 		fin >> vertices[i].Pos.x >> vertices[i].Pos.y >> vertices[i].Pos.z;
 		fin >> vertices[i].Normal.x >> vertices[i].Normal.y >> vertices[i].Normal.z;
-
-		// Model does not have texture coordinates, so just zero them out.
-		vertices[i].TexC = { 0.0f, 0.0f };
 	}
 
 	fin >> ignore;
 	fin >> ignore;
 	fin >> ignore;
 
-	std::vector<std::int32_t> indices(3 * tcount);
-	for (UINT i = 0; i < tcount; ++i)
+	std::vector<std::uint32_t> indices(3 * tcount);
+	for (uint32_t i = 0; i < tcount; ++i)
 	{
 		fin >> indices[i * 3 + 0] >> indices[i * 3 + 1] >> indices[i * 3 + 2];
 	}
@@ -441,131 +416,417 @@ void StencilApp::BuildSkullGeometry()
 
 	const UINT vbByteSize = (UINT)vertices.size() * sizeof(Vertex);
 
-	const UINT ibByteSize = (UINT)indices.size() * sizeof(std::int32_t);
+	const UINT ibByteSize = (UINT)indices.size() * sizeof(std::uint32_t);
 
 	auto geo = std::make_unique<MeshGeometry>();
 	geo->Name = "skullGeo";
 
-	geo->vertexBufferCPU = malloc(vbByteSize);
-	memcpy(geo->vertexBufferCPU, vertices.data(), vbByteSize);
+	Vulkan::BufferProperties props;
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	props.size = vbByteSize;
+	Vulkan::initBuffer(mDevice, mMemoryProperties, props, geo->vertexBufferGPU);
 
-	geo->indexBufferCPU = malloc(ibByteSize);
-	memcpy(geo->indexBufferCPU, indices.data(), ibByteSize);
-
-	initBuffer(mDevice, mMemoryProperties, vbByteSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->vertexBufferGPU);
-	initBuffer(mDevice, mMemoryProperties, ibByteSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->indexBufferGPU);
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+	props.size = ibByteSize;
+	Vulkan::initBuffer(mDevice, mMemoryProperties, props, geo->indexBufferGPU);
 
 	VkDeviceSize maxSize = std::max(vbByteSize, ibByteSize);
-	Buffer stagingBuffer;
-	initBuffer(mDevice, mMemoryProperties, maxSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer);
+	Vulkan::Buffer stagingBuffer;
+
+#ifdef __USE__VMA__
+	props.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+#else
+	props.memoryProps = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+#endif
+	props.bufferUsage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+	props.size = maxSize;
+	initBuffer(mDevice, mMemoryProperties, props, stagingBuffer);
 	void* ptr = mapBuffer(mDevice, stagingBuffer);
 	//copy vertex data
 	memcpy(ptr, vertices.data(), vbByteSize);
+
 	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->vertexBufferGPU, vbByteSize);
 	memcpy(ptr, indices.data(), ibByteSize);
 	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->indexBufferGPU, ibByteSize);
 	unmapBuffer(mDevice, stagingBuffer);
 	cleanupBuffer(mDevice, stagingBuffer);
 
+	/*initBuffer(mDevice, mMemoryProperties, vbByteSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->vertexBufferGPU);
+	initBuffer(mDevice, mMemoryProperties, ibByteSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, geo->indexBufferGPU);
+	VkDeviceSize maxSize = std::max(vbByteSize, ibByteSize);
+	Buffer stagingBuffer;
+	initBuffer(mDevice, mMemoryProperties, maxSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, stagingBuffer);
+	void* ptr = mapBuffer(mDevice, stagingBuffer);
+	memcpy(ptr, vertices.data(), vbByteSize);
+	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->vertexBufferGPU, vbByteSize);
+	memcpy(ptr, indices.data(), ibByteSize);
+	CopyBufferTo(mDevice, mGraphicsQueue, mCommandBuffer, stagingBuffer, geo->indexBufferGPU, ibByteSize);
+	unmapBuffer(mDevice, stagingBuffer);
+	cleanupBuffer(mDevice, stagingBuffer);*/
 
-	//ThrowIfFailed(D3DCreateBlob(vbByteSize, &geo->VertexBufferCPU));
-	//CopyMemory(geo->VertexBufferCPU->GetBufferPointer(), vertices.data(), vbByteSize);
+	geo->VertexByteStride = sizeof(Vertex);
+	geo->VertexBufferByteSize = vbByteSize;
 
-	//ThrowIfFailed(D3DCreateBlob(ibByteSize, &geo->IndexBufferCPU));
-	//CopyMemory(geo->IndexBufferCPU->GetBufferPointer(), indices.data(), ibByteSize);
-
-	//geo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
-	//	mCommandList.Get(), vertices.data(), vbByteSize, geo->VertexBufferUploader);
-
-	//geo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
-	//	mCommandList.Get(), indices.data(), ibByteSize, geo->IndexBufferUploader);
-
-	geo->vertexByteStride = sizeof(Vertex);
-	geo->vertexBufferByteSize = vbByteSize;
-	//geo->indexFormat = DXGI_FORMAT_R32_UINT;
-	geo->indexBufferByteSize = ibByteSize;
+	geo->IndexBufferByteSize = ibByteSize;
 
 	SubmeshGeometry submesh;
-	submesh.indexCount = (UINT)indices.size();
-	submesh.startIndexLocation = 0;
-	submesh.baseVertexLocation = 0;
+	submesh.IndexCount = (uint32_t)indices.size();
+	submesh.StartIndexLocation = 0;
+	submesh.BaseVertexLocation = 0;
 
 	geo->DrawArgs["skull"] = submesh;
-
 	mGeometries[geo->Name] = std::move(geo);
+
 }
 
 void StencilApp::BuildPSOs() {
 	{
-		std::vector<ShaderModule> shaders = {
-				{initShaderModule(mDevice,"shaders/default.vert.spv"),VK_SHADER_STAGE_VERTEX_BIT},
-				{initShaderModule(mDevice,"shaders/default.frag.spv"),VK_SHADER_STAGE_FRAGMENT_BIT}
-		};
-		VkPipeline opaquePipeline = initGraphicsPipeline(mDevice, mRenderPass, mPipelineLayout, shaders, Vertex::getInputBindingDescription(), Vertex::getInputAttributeDescription(), VK_CULL_MODE_FRONT_BIT, true, mMSAA ? mNumSamples : VK_SAMPLE_COUNT_1_BIT, VK_FALSE, VK_POLYGON_MODE_FILL);
-		VkPipeline wireframePipeline = initGraphicsPipeline(mDevice, mRenderPass, mPipelineLayout, shaders, Vertex::getInputBindingDescription(), Vertex::getInputAttributeDescription(), VK_CULL_MODE_FRONT_BIT, true, mMSAA ? mNumSamples : VK_SAMPLE_COUNT_1_BIT, VK_FALSE, VK_POLYGON_MODE_LINE);
+		//DescriptorSetPoolCache poolCache(mDevice);
+		//DescriptorSetLayoutCache layoutCache(mDevice);
+
+		descriptorSetPoolCache = std::make_unique<DescriptorSetPoolCache>(mDevice);
+		descriptorSetLayoutCache = std::make_unique<DescriptorSetLayoutCache>(mDevice);
+
+		VkDescriptorSet descriptor0 = VK_NULL_HANDLE;
+		std::vector<VkDescriptorSet> descriptorSets0;
+
+		VkDescriptorSetLayout descriptorLayout0;
+		DescriptorSetBuilder2::begin(descriptorSetPoolCache.get(), descriptorSetLayoutCache.get())
+			.AddBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
+			.build(descriptor0, descriptorLayout0);
+
+		VkDescriptorSet descriptor1 = VK_NULL_HANDLE;
+		std::vector<VkDescriptorSet> descriptorSets1;
+		VkDescriptorSetLayout descriptorLayout1;
+		DescriptorSetBuilder2::begin(descriptorSetPoolCache.get(), descriptorSetLayoutCache.get())
+			.AddBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT)
+			.build(descriptor1, descriptorLayout1);
+
+		VkDescriptorSet descriptor2 = VK_NULL_HANDLE;
+		std::vector<VkDescriptorSet> descriptorSets2;
+		VkDescriptorSetLayout descriptorLayout2;
+		DescriptorSetBuilder2::begin(descriptorSetPoolCache.get(), descriptorSetLayoutCache.get())
+			.AddBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT)
+			.build(descriptor2, descriptorLayout2);
+
+		VkDescriptorSet descriptor3 = VK_NULL_HANDLE;
+		std::vector<VkDescriptorSet> descriptorSets3;
+		VkDescriptorSetLayout descriptorLayout3 = VK_NULL_HANDLE;
+		DescriptorSetBuilder2::begin(descriptorSetPoolCache.get(), descriptorSetLayoutCache.get())
+			.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+			.build(descriptorSets3, descriptorLayout3, 4);
+
+		Vulkan::Buffer dynamicBuffer;
+		std::vector<UniformBufferInfo> bufferInfo;
+		UniformBufferBuilder::begin(mDevice, mDeviceProperties, mMemoryProperties, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, true)
+			.AddBuffer(sizeof(PassConstants), 2, gNumFrameResources)
+			.AddBuffer(sizeof(ObjectConstants), mAllRitems.size(), gNumFrameResources)
+			.AddBuffer(sizeof(MaterialConstants), mMaterials.size(), gNumFrameResources)
+			.build(dynamicBuffer, bufferInfo);
+		uniformBuffer = std::make_unique<UniformBuffer>(mDevice,dynamicBuffer, bufferInfo);
+
+		std::vector<Vulkan::Texture> texturesList;
+		TextureLoader::begin(mDevice, mCommandBuffer, mGraphicsQueue, mMemoryProperties)
+			.addTexture("../../../Textures/bricks3.jpg")
+			.addTexture("../../../Textures/checkboard.jpg")
+			.addTexture("../../../Textures/ice.jpg")
+			.addTexture("../../../Textures/white1x1.jpg")
+			.load(texturesList);
+
+		textures = std::make_unique<VulkanTextureList>(mDevice,texturesList);
+		textureDescriptors = std::make_unique<VulkanDescriptorList>(mDevice,descriptorSets3);
+
+		std::vector<VkDescriptorSet> descriptors{ descriptor0,descriptor1,descriptor2 };
+		uniformDescriptors = std::make_unique<VulkanDescriptorList>(mDevice,descriptors);
+
+		std::vector<VkDescriptorSetLayout> descriptorLayouts = { descriptorLayout0,descriptorLayout1,descriptorLayout2 };
+		//std::vector<VkDescriptorBufferInfo> descriptorBufferInfo;
+		VkDeviceSize offset = 0;
+
+		for (size_t i = 0; i < descriptors.size(); ++i) {
+			//descriptorBufferInfo.clear();
+			VkDeviceSize range = bufferInfo[i].objectSize;// bufferInfo[i].objectCount* bufferInfo[i].objectSize* bufferInfo[i].repeatCount;
+			VkDeviceSize bufferSize = bufferInfo[i].objectCount * bufferInfo[i].objectSize * bufferInfo[i].repeatCount;
+			VkDescriptorBufferInfo descrInfo{};
+			descrInfo.buffer = dynamicBuffer.buffer;
+			descrInfo.offset = offset;
+			descrInfo.range = bufferInfo[i].objectSize;
+			//descriptorBufferInfo.push_back(descrInfo);
+			offset += bufferSize;
+			VkDescriptorSetLayout layout = descriptorLayouts[i];
+			DescriptorSetUpdater::begin(descriptorSetLayoutCache.get(), layout, descriptors[i])
+				.AddBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, &descrInfo)
+				.update();
+
+		}
+
+		for (size_t i = 0; i < texturesList.size(); ++i) {
+			VkDescriptorImageInfo imageInfo{};
+			imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			imageInfo.imageView = texturesList[i].imageView;
+			imageInfo.sampler = texturesList[i].sampler;
+			DescriptorSetUpdater::begin(descriptorSetLayoutCache.get(), descriptorLayout3, descriptorSets3[i])
+				.AddBinding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfo)
+				.update();
+
+		}
+
+		VkPipelineLayout layout{ VK_NULL_HANDLE };
+		PipelineLayoutBuilder::begin(mDevice)
+			.AddDescriptorSetLayout(descriptorLayout0)
+			.AddDescriptorSetLayout(descriptorLayout1)
+			.AddDescriptorSetLayout(descriptorLayout2)
+			.AddDescriptorSetLayout(descriptorLayout3)
+			.build(layout);
+		pipelineLayout = std::make_unique<VulkanPipelineLayout>(mDevice,layout);
+
+		std::vector<Vulkan::ShaderModule> shaders;
+		VkVertexInputBindingDescription vertexInputDescription = {};
+		std::vector<VkVertexInputAttributeDescription> vertexAttributeDescriptions;
+		ShaderProgramLoader::begin(mDevice)
+			.AddShaderPath("Shaders/default.vert.spv")
+			.AddShaderPath("Shaders/default.frag.spv")
+			.load(shaders, vertexInputDescription, vertexAttributeDescriptions);
+
 		
+	//Vulkan::PipelineInfo pipelineInfo;
+	//pipelineInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+	//pipelineInfo.polygonMode = VK_POLYGON_MODE_FILL;
+	//pipelineInfo.depthTest = VK_TRUE;
 
-		mPSOs["opaque"] = opaquePipeline;
-		mPSOs["opaque_wireframe"] = wireframePipeline;
-		
+	//opaquePipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+		VkPipeline pipeline{ VK_NULL_HANDLE };
+		PipelineBuilder::begin(mDevice, *pipelineLayout, mRenderPass, shaders, vertexInputDescription, vertexAttributeDescriptions)
+			.setCullMode(VK_CULL_MODE_FRONT_BIT)
+			.setPolygonMode(VK_POLYGON_MODE_FILL)
+			.setDepthTest(VK_TRUE)
+			.build(pipeline);
+		opaquePipeline = std::make_unique<VulkanPipeline>(mDevice,pipeline);
 
-		VkStencilOpState stencil{};
-		stencil.compareOp = VK_COMPARE_OP_ALWAYS;
-		stencil.failOp = VK_STENCIL_OP_REPLACE;
-		stencil.depthFailOp = VK_STENCIL_OP_REPLACE;
-		stencil.passOp = VK_STENCIL_OP_REPLACE;
-		stencil.writeMask = 0xFF;
-		stencil.compareMask = 0xFF;
-		stencil.reference = 0xFF;
-		VkPipeline mirrorPipeline = initGraphicsPipeline(mDevice, mRenderPass, mPipelineLayout, shaders, Vertex::getInputBindingDescription(), Vertex::getInputAttributeDescription(), VK_CULL_MODE_FRONT_BIT,false, &stencil,true, mMSAA ? mNumSamples : VK_SAMPLE_COUNT_1_BIT, VK_TRUE, VK_POLYGON_MODE_FILL);
-		mPSOs["markStencilMirrors"] = mirrorPipeline;
+		//pipelineInfo.polygonMode = VK_POLYGON_MODE_LINE;
+	//wireframePipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+	// PipelineBuilder::begin(mDevice, *pipelineLayout, mRenderPass, shaders, vertexInputDescription, vertexAttributeDescriptions)
+		PipelineBuilder::begin(mDevice, *pipelineLayout, mRenderPass, shaders, vertexInputDescription, vertexAttributeDescriptions)
+			.setCullMode(VK_CULL_MODE_FRONT_BIT)
+			.setPolygonMode(VK_POLYGON_MODE_LINE)
+			.setDepthTest(VK_TRUE)
+			.build(pipeline);
+		wireframePipeline = std::make_unique<VulkanPipeline>(mDevice,pipeline);
+	//pipelineInfo.polygonMode = VK_POLYGON_MODE_FILL;
+	//pipelineInfo.blend = VK_TRUE;
+	//transparentPipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+		PipelineBuilder::begin(mDevice, *pipelineLayout, mRenderPass, shaders, vertexInputDescription, vertexAttributeDescriptions)
+			.setCullMode(VK_CULL_MODE_FRONT_BIT)
+			.setPolygonMode(VK_POLYGON_MODE_FILL)
+			.setDepthTest(VK_TRUE)
+			.setBlend(VK_TRUE)			
+			.build(pipeline);
+		transparentPipeline = std::make_unique<VulkanPipeline>(mDevice,pipeline);
 
-		stencil.failOp = VK_STENCIL_OP_KEEP;
-		stencil.depthFailOp = VK_STENCIL_OP_REPLACE;
-		stencil.passOp = VK_STENCIL_OP_REPLACE;
-		stencil.compareOp = VK_COMPARE_OP_EQUAL;
-		stencil.writeMask = 0xFF;
-		stencil.compareMask = 0xFF;
-		stencil.reference = 0xFF;
-		VkPipeline reflectionPipeline = initGraphicsPipeline(mDevice, mRenderPass, mPipelineLayout, shaders, Vertex::getInputBindingDescription(), Vertex::getInputAttributeDescription(), VK_CULL_MODE_BACK_BIT,true, &stencil, mMSAA ? mNumSamples : VK_SAMPLE_COUNT_1_BIT, VK_FALSE, VK_POLYGON_MODE_FILL);
-		mPSOs["drawStencilReflections"] = reflectionPipeline;
+		//pipelineInfo.stencilTest = VK_TRUE;
+	//pipelineInfo.stencil.failOp = VK_STENCIL_OP_REPLACE;
+	//pipelineInfo.stencil.depthFailOp = VK_STENCIL_OP_REPLACE;
+	//pipelineInfo.stencil.passOp = VK_STENCIL_OP_REPLACE;
+	//pipelineInfo.stencil.compareOp = VK_COMPARE_OP_ALWAYS;
+	//pipelineInfo.stencil.writeMask = 0xFF;
+	//pipelineInfo.stencil.compareMask = 0xFF;
+	//pipelineInfo.stencil.reference = 0xFF;
+	//markStencilMirrorsPipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+		PipelineBuilder::begin(mDevice, *pipelineLayout, mRenderPass, shaders, vertexInputDescription, vertexAttributeDescriptions)
+			.setCullMode(VK_CULL_MODE_FRONT_BIT)
+			.setPolygonMode(VK_POLYGON_MODE_FILL)
+			.setBlend(VK_TRUE)			
+			.setStencilTest(VK_TRUE)				
+			.setStencilState(VK_STENCIL_OP_REPLACE,VK_STENCIL_OP_REPLACE,VK_STENCIL_OP_REPLACE,VK_COMPARE_OP_ALWAYS,0xFF,0xFF,0xFF)	
+			.setNoDraw(VK_TRUE)
+			.build(pipeline);
+		markStencilMirrorsPipeline = std::make_unique<VulkanPipeline>(mDevice,pipeline);
 
-		stencil.failOp = VK_STENCIL_OP_KEEP;
-		stencil.depthFailOp = VK_STENCIL_OP_KEEP;
-		stencil.passOp = VK_STENCIL_OP_INCREMENT_AND_WRAP;
-		stencil.compareOp = VK_COMPARE_OP_EQUAL;
-		stencil.writeMask = 0xFF;
-		stencil.compareMask = 0xFF;
-		stencil.reference = 0x00;
-		VkPipeline shadowPipeline = initGraphicsPipeline(mDevice, mRenderPass, mPipelineLayout, shaders, Vertex::getInputBindingDescription(), Vertex::getInputAttributeDescription(), VK_CULL_MODE_FRONT_BIT, true, &stencil, mMSAA ? mNumSamples : VK_SAMPLE_COUNT_1_BIT, VK_TRUE, VK_POLYGON_MODE_FILL);
-		mPSOs["shadow"] = shadowPipeline;
+		//pipelineInfo.stencilTest = VK_TRUE;
+	//pipelineInfo.stencil.failOp = VK_STENCIL_OP_KEEP;
+	//pipelineInfo.stencil.depthFailOp = VK_STENCIL_OP_REPLACE;
+	//pipelineInfo.stencil.passOp = VK_STENCIL_OP_REPLACE;
+	//pipelineInfo.stencil.compareOp = VK_COMPARE_OP_EQUAL;
+	//pipelineInfo.stencil.writeMask = 0xFF;
+	//pipelineInfo.stencil.compareMask = 0xFF;
+	//pipelineInfo.stencil.reference = 0xFF;
+	//drawStencilReflectionsPipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+		PipelineBuilder::begin(mDevice, *pipelineLayout, mRenderPass, shaders, vertexInputDescription, vertexAttributeDescriptions)
+			.setCullMode(VK_CULL_MODE_BACK_BIT)
+			.setPolygonMode(VK_POLYGON_MODE_FILL)			
+			.setDepthTest(VK_TRUE)
+			.setStencilTest(VK_TRUE)
+			.setStencilState(VK_STENCIL_OP_KEEP, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_REPLACE, VK_COMPARE_OP_EQUAL, 0xFF, 0xFF, 0xFF)
+			//.setBlend(VK_TRUE)
+			.build(pipeline);
+		drawStencilReflectionsPipeline = std::make_unique<VulkanPipeline>(mDevice,pipeline);
+
+		//pipelineInfo.stencilTest = VK_TRUE;
+	//pipelineInfo.stencil.failOp = VK_STENCIL_OP_KEEP;
+	//pipelineInfo.stencil.depthFailOp = VK_STENCIL_OP_KEEP;
+	//pipelineInfo.stencil.passOp = VK_STENCIL_OP_INCREMENT_AND_WRAP;
+	//pipelineInfo.stencil.compareOp = VK_COMPARE_OP_EQUAL;
+	//pipelineInfo.stencil.writeMask = 0xFF;
+	//pipelineInfo.stencil.compareMask = 0xFF;
+	//pipelineInfo.stencil.reference = 0x00;
+	//shadowPipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+		PipelineBuilder::begin(mDevice, *pipelineLayout, mRenderPass, shaders, vertexInputDescription, vertexAttributeDescriptions)
+			.setCullMode(VK_CULL_MODE_FRONT_BIT)
+			.setPolygonMode(VK_POLYGON_MODE_FILL)
+			.setDepthTest(VK_TRUE)
+			.setStencilTest(VK_TRUE)
+			.setStencilState(VK_STENCIL_OP_KEEP, VK_STENCIL_OP_INCREMENT_AND_WRAP, VK_STENCIL_OP_KEEP, VK_COMPARE_OP_EQUAL, 0xFF, 0xFF, 0x00)
+			.setBlend(VK_TRUE)
+			.build(pipeline);
+		shadowPipeline = std::make_unique<VulkanPipeline>(mDevice,pipeline);
 
 
-		VkPipeline transPipeline = initGraphicsPipeline(mDevice, mRenderPass, mPipelineLayout, shaders, Vertex::getInputBindingDescription(), Vertex::getInputAttributeDescription(), VK_CULL_MODE_FRONT_BIT, true, mMSAA ? mNumSamples : VK_SAMPLE_COUNT_1_BIT, VK_TRUE, VK_POLYGON_MODE_FILL);
-		mPSOs["transparent"] = transPipeline;
+		for (auto& shader : shaders) {
+			Vulkan::cleanupShaderModule(mDevice, shader.shaderModule);
+		}
+		/*VkPipeline pipeline{ VK_NULL_HANDLE };
+		PipelineBuilder::begin(mDevice, *pipelineLayout, mRenderPass, shaders, vertexInputDescription, vertexAttributeDescriptions)
+			.build(pipeline);*/
 
-
-
-		cleanupShaderModule(mDevice, shaders[0].shaderModule);
-		cleanupShaderModule(mDevice, shaders[1].shaderModule); 
+		/*VkDescriptorBufferInfo bufferInfo{};
+		VkDescriptorBufferInfo bufferInfo2{};
+		VkDescriptorBufferInfo bufferInfo3{};
+		VkDescriptorImageInfo imageInfo{};
+		std::vector<VkDescriptorSet> sets;
+		std::vector<VkDescriptorSetLayout> layouts;
+		DescriptorSetBuilder::begin(&poolCache, &layoutCache)
+			.AddBinding(0, 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT,&bufferInfo)
+			.AddBinding(1,0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT,&bufferInfo2)
+			.AddBinding(2,0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT,&bufferInfo3)
+			.AddBinding(3,0,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,VK_SHADER_STAGE_FRAGMENT_BIT,&imageInfo)
+			.build(sets, layouts);*/
+			/*Vulkan::Texture textures[] = { *mTextures["bricksTqeex"].get(),*mTextures["checkboardTex"].get(),*mTextures["iceTex"].get(),*mTextures["white1x1Tex"].get() };
+			VulkContext vulkContext{ mDevice,mDeviceProperties,mMemoryProperties,mCommandBuffer,mGraphicsQueue };
+			ShaderResourceCache shaderRes(vulkContext, &poolCache, &layoutCache);
+			shaderRes.AddResource(0, 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT, sizeof(PassConstants), 1, gNumFrameResources)
+				.AddResource(1, 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT, sizeof(ObjectConstants), mAllRitems.size(), gNumFrameResources)
+				.AddResource(2, 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, VK_SHADER_STAGE_VERTEX_BIT, sizeof(MaterialConstants), mMaterials.size(), gNumFrameResources)
+				.AddResource(3, 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, textures, 4)
+				.build();
+		}*/
 	}
+	/*{
+		DescriptorLayoutCache cache;
+		DescriptorAllocator allocator;
+		allocator.init(mDevice);
+		cache.init(mDevice);
+		VkDescriptorBufferInfo buffer{};
+		VkDescriptorSet descriptorSet;
+		DescriptorBuilder::begin(&cache, &allocator).bind_buffer(0, &buffer, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT).build(descriptorSet);
+	}*/
+
+	//VulkanContext vulkanContext{ mDevice,mDeviceProperties,mMemoryProperties,mCommandBuffer,mGraphicsQueue };
+	//pipelineRes = std::make_unique<ShaderResources>(vulkanContext);
+	//Vulkan::Texture textures[] = { *mTextures["bricksTex"].get(),*mTextures["checkboardTex"].get(),*mTextures["iceTex"].get(),*mTextures["white1x1Tex"].get()};
+	//std::vector<std::vector<ShaderResource>> pipelineResourceInfos{
+	//	{
+	//		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(PassConstants),1,gNumFrameResources,true},
+	//	},
+	//	{
+	//		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT,sizeof(ObjectConstants),mAllRitems.size(),gNumFrameResources,true},
+	//	},
+	//	{
+	//		{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,sizeof(MaterialConstants),mMaterials.size(),gNumFrameResources,true},
+	//	},
+	//	{
+	//		{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,VK_SHADER_STAGE_FRAGMENT_BIT,textures,4},
+	//	}
+	//};
+	//pipelineRes->AddShaderResources(pipelineResourceInfos/*, gNumFrameResources*/);
+
+	//prog = std::make_unique<ShaderProgram>(mDevice);
+	//std::vector<const char*> shaderPaths = { "Shaders/default.vert.spv","Shaders/default.frag.spv" };
+	//prog->load(shaderPaths);
+
+	//pipelineLayout = std::make_unique<PipelineLayout>(mDevice, *pipelineRes);
+	//Vulkan::PipelineInfo pipelineInfo;
+	//pipelineInfo.cullMode = VK_CULL_MODE_BACK_BIT;
+	//pipelineInfo.polygonMode = VK_POLYGON_MODE_FILL;
+	//pipelineInfo.depthTest = VK_TRUE;
+
+	//opaquePipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+
+	//pipelineInfo.polygonMode = VK_POLYGON_MODE_LINE;
+	//wireframePipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+	//pipelineInfo.polygonMode = VK_POLYGON_MODE_FILL;
+	//pipelineInfo.blend = VK_TRUE;
+	//transparentPipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+
+	//pipelineInfo.stencilTest = VK_TRUE;
+	//pipelineInfo.stencil.failOp = VK_STENCIL_OP_REPLACE;
+	//pipelineInfo.stencil.depthFailOp = VK_STENCIL_OP_REPLACE;
+	//pipelineInfo.stencil.passOp = VK_STENCIL_OP_REPLACE;
+	//pipelineInfo.stencil.compareOp = VK_COMPARE_OP_ALWAYS;
+	//pipelineInfo.stencil.writeMask = 0xFF;
+	//pipelineInfo.stencil.compareMask = 0xFF;
+	//pipelineInfo.stencil.reference = 0xFF;
+	//markStencilMirrorsPipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+
+	//pipelineInfo.stencilTest = VK_TRUE;
+	//pipelineInfo.stencil.failOp = VK_STENCIL_OP_KEEP;
+	//pipelineInfo.stencil.depthFailOp = VK_STENCIL_OP_REPLACE;
+	//pipelineInfo.stencil.passOp = VK_STENCIL_OP_REPLACE;
+	//pipelineInfo.stencil.compareOp = VK_COMPARE_OP_EQUAL;
+	//pipelineInfo.stencil.writeMask = 0xFF;
+	//pipelineInfo.stencil.compareMask = 0xFF;
+	//pipelineInfo.stencil.reference = 0xFF;
+	//drawStencilReflectionsPipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
 
 
+
+	//pipelineInfo.stencilTest = VK_TRUE;
+	//pipelineInfo.stencil.failOp = VK_STENCIL_OP_KEEP;
+	//pipelineInfo.stencil.depthFailOp = VK_STENCIL_OP_KEEP;
+	//pipelineInfo.stencil.passOp = VK_STENCIL_OP_INCREMENT_AND_WRAP;
+	//pipelineInfo.stencil.compareOp = VK_COMPARE_OP_EQUAL;
+	//pipelineInfo.stencil.writeMask = 0xFF;
+	//pipelineInfo.stencil.compareMask = 0xFF;
+	//pipelineInfo.stencil.reference = 0x00;
+	//shadowPipeline = std::make_unique<Pipeline>(mDevice, mRenderPass, *prog, *pipelineLayout, pipelineInfo);
+
+	mPSOs["opaque"] = *opaquePipeline;
+	mPSOs["opaque_wireframe"] = *wireframePipeline;
+	mPSOs["markStencilMirrors"] = *markStencilMirrorsPipeline;
+	mPSOs["drawStencilReflections"] = *drawStencilReflectionsPipeline;
+	mPSOs["shadow"] = *shadowPipeline;
+	mPSOs["transparent"] = *transparentPipeline;
 }
 
-void StencilApp::BuildFrameResources()
-{
-	for (int i = 0; i < gNumFrameResources; ++i)
-	{
-		std::vector<VkDescriptorSet> descriptorSets{
-			mDescriptorSetsPC[i],
-			mDescriptorSetsOBs[i],
-			mDescriptorSetsMats[i]
-		};
-		mFrameResources.push_back(std::make_unique<FrameResource>(mDevice, mMemoryProperties, descriptorSets, (uint32_t)mDeviceProperties.limits.minUniformBufferOffsetAlignment,
-			2/*main & reflected passes*/, (UINT)mAllRitems.size(), (UINT)mMaterials.size()));
+
+void StencilApp::BuildFrameResources() {
+	/*void* pPassCB = pipelineRes->GetShaderResource(0).buffer.ptr;
+	VkDeviceSize passSize = pipelineRes->GetShaderResource(0).buffer.objectSize;
+	void* pObjectCB = pipelineRes->GetShaderResource(1).buffer.ptr;
+	VkDeviceSize objectSize = pipelineRes->GetShaderResource(1).buffer.objectSize;
+	void* pMatCB = pipelineRes->GetShaderResource(2).buffer.ptr;
+	VkDeviceSize matSize = pipelineRes->GetShaderResource(2).buffer.objectSize;*/
+	
+	for (int i = 0; i < gNumFrameResources; i++) {
+		auto& ub = *uniformBuffer;
+		
+		PassConstants* pc = (PassConstants*)((uint8_t*)ub[0].ptr+ub[0].objectSize*ub[0].objectCount*i);// ((uint8_t*)pPassCB + passSize * i);
+		ObjectConstants* oc = (ObjectConstants*)((uint8_t*)ub[1].ptr+ub[1].objectSize*ub[1].objectCount*i);// ((uint8_t*)pObjectCB + objectSize * mAllRitems.size() * i);
+		MaterialConstants* mc = (MaterialConstants*)((uint8_t*)ub[2].ptr+ub[2].objectSize*ub[2].objectCount*i);// ((uint8_t*)pMatCB + matSize * mMaterials.size() * i);
+		
+		mFrameResources.push_back(std::make_unique<FrameResource>(pc, oc, mc));
 	}
 }
+
 
 void StencilApp::BuildMaterials()
 {
@@ -631,9 +892,9 @@ void StencilApp::BuildRenderItems()
 	floorRitem->Mat = mMaterials["checkertile"].get();
 	floorRitem->Geo = mGeometries["roomGeo"].get();
 	//floorRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	floorRitem->IndexCount = floorRitem->Geo->DrawArgs["floor"].indexCount;
-	floorRitem->StartIndexLocation = floorRitem->Geo->DrawArgs["floor"].startIndexLocation;
-	floorRitem->BaseVertexLocation = floorRitem->Geo->DrawArgs["floor"].baseVertexLocation;
+	floorRitem->IndexCount = floorRitem->Geo->DrawArgs["floor"].IndexCount;
+	floorRitem->StartIndexLocation = floorRitem->Geo->DrawArgs["floor"].StartIndexLocation;
+	floorRitem->BaseVertexLocation = floorRitem->Geo->DrawArgs["floor"].BaseVertexLocation;
 	mRitemLayer[(int)RenderLayer::Opaque].push_back(floorRitem.get());
 
 	auto wallsRitem = std::make_unique<RenderItem>();
@@ -643,9 +904,9 @@ void StencilApp::BuildRenderItems()
 	wallsRitem->Mat = mMaterials["bricks"].get();
 	wallsRitem->Geo = mGeometries["roomGeo"].get();
 	//wallsRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	wallsRitem->IndexCount = wallsRitem->Geo->DrawArgs["wall"].indexCount;
-	wallsRitem->StartIndexLocation = wallsRitem->Geo->DrawArgs["wall"].startIndexLocation;
-	wallsRitem->BaseVertexLocation = wallsRitem->Geo->DrawArgs["wall"].baseVertexLocation;
+	wallsRitem->IndexCount = wallsRitem->Geo->DrawArgs["wall"].IndexCount;
+	wallsRitem->StartIndexLocation = wallsRitem->Geo->DrawArgs["wall"].StartIndexLocation;
+	wallsRitem->BaseVertexLocation = wallsRitem->Geo->DrawArgs["wall"].BaseVertexLocation;
 	mRitemLayer[(int)RenderLayer::Opaque].push_back(wallsRitem.get());
 
 	auto skullRitem = std::make_unique<RenderItem>();
@@ -655,9 +916,9 @@ void StencilApp::BuildRenderItems()
 	skullRitem->Mat = mMaterials["skullMat"].get();
 	skullRitem->Geo = mGeometries["skullGeo"].get();
 	//skullRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	skullRitem->IndexCount = skullRitem->Geo->DrawArgs["skull"].indexCount;
-	skullRitem->StartIndexLocation = skullRitem->Geo->DrawArgs["skull"].startIndexLocation;
-	skullRitem->BaseVertexLocation = skullRitem->Geo->DrawArgs["skull"].baseVertexLocation;
+	skullRitem->IndexCount = skullRitem->Geo->DrawArgs["skull"].IndexCount;
+	skullRitem->StartIndexLocation = skullRitem->Geo->DrawArgs["skull"].StartIndexLocation;
+	skullRitem->BaseVertexLocation = skullRitem->Geo->DrawArgs["skull"].BaseVertexLocation;
 	mSkullRitem = skullRitem.get();
 	mRitemLayer[(int)RenderLayer::Opaque].push_back(skullRitem.get());
 
@@ -683,9 +944,9 @@ void StencilApp::BuildRenderItems()
 	mirrorRitem->Mat = mMaterials["icemirror"].get();
 	mirrorRitem->Geo = mGeometries["roomGeo"].get();
 	//mirrorRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-	mirrorRitem->IndexCount = mirrorRitem->Geo->DrawArgs["mirror"].indexCount;
-	mirrorRitem->StartIndexLocation = mirrorRitem->Geo->DrawArgs["mirror"].startIndexLocation;
-	mirrorRitem->BaseVertexLocation = mirrorRitem->Geo->DrawArgs["mirror"].baseVertexLocation;
+	mirrorRitem->IndexCount = mirrorRitem->Geo->DrawArgs["mirror"].IndexCount;
+	mirrorRitem->StartIndexLocation = mirrorRitem->Geo->DrawArgs["mirror"].StartIndexLocation;
+	mirrorRitem->BaseVertexLocation = mirrorRitem->Geo->DrawArgs["mirror"].BaseVertexLocation;
 	mRitemLayer[(int)RenderLayer::Mirrors].push_back(mirrorRitem.get());
 	mRitemLayer[(int)RenderLayer::Transparent].push_back(mirrorRitem.get());
 
@@ -697,245 +958,38 @@ void StencilApp::BuildRenderItems()
 	mAllRitems.push_back(std::move(mirrorRitem));
 }
 
-void StencilApp::Draw(const GameTimer& gt) {
-	uint32_t index = 0;
-	VkCommandBuffer cmd{ VK_NULL_HANDLE };
 
-	cmd = BeginRender();
-
-	VkViewport viewport = { 0.0f,0.0f,(float)mClientWidth,(float)mClientHeight,0.0f,1.0f };
-	pvkCmdSetViewport(cmd, 0, 1, &viewport);
-	VkRect2D scissor = { {0,0},{(uint32_t)mClientWidth,(uint32_t)mClientHeight} };
-	pvkCmdSetScissor(cmd, 0, 1, &scissor);
-
-	VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
-	VkDeviceSize passSize = ((uint32_t)sizeof(PassConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
-	uint32_t dynamicOffsets[1] = { 0 };	
-	pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets);//bind PC data once
-	uint32_t dynamicOffsets2[1] = { (uint32_t)passSize };
-	
-	if (mIsWireframe) {
-		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["opaque_wireframe"]);
-		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Opaque]);
-		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Mirrors]);
-		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets2);//bind PC data once
-		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Reflected]);
-		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets);//bind PC data once
-		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Transparent]);
-		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Shadow]);
-	}
-	else {
-
-		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["opaque"]);
-		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Opaque]);
-		//vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_BIT, 1);
-		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["markStencilMirrors"]);
-		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Mirrors]);
-		
-		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets2);//bind PC data once
-		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["drawStencilReflections"]);
-		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Reflected]);
-		//vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_BIT, 0);
-		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets);//bind PC data once
-		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["transparent"]);
-		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Transparent]);
-		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["shadow"]);
-		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Shadow]);
-	}
-
-
-
-
-
-
-	EndRender(cmd, mCurrFrameResource->Fence);
-
-
-}
-void StencilApp::DrawRenderItems(VkCommandBuffer cmd, const std::vector<RenderItem*>& ritems) {
-	//	VkDeviceSize obSize = mCurrFrameResource->ObjectCBSize;
-	VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
-	VkDeviceSize objSize = ((uint32_t)sizeof(ObjectConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
-	VkDeviceSize matSize = ((uint32_t)sizeof(Material) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
-	uint32_t dynamicOffsets[1] = { 0 };
-	uint32_t count = getSwapchainImageCount(mSurfaceCaps);
-	//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets);//bind PC data once
-
-	for (size_t i = 0; i < ritems.size(); i++) {
-		auto ri = ritems[i];
-		uint32_t indexOffset = ri->StartIndexLocation;
-
-		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 3, 1, &mDescriptorSetsTextures[ri->Mat->DiffuseSrvHeapIndex], 0, 0);//bin texture descriptor
-		const auto vbv = ri->Geo->vertexBufferGPU;
-		pvkCmdBindVertexBuffers(cmd, 0, 1, &vbv.buffer, mOffsets);
-		const auto ibv = ri->Geo->indexBufferGPU;
-		pvkCmdBindIndexBuffer(cmd, ibv.buffer, indexOffset * sizeof(uint32_t), VK_INDEX_TYPE_UINT32);
-		uint32_t cbvIndex = ri->ObjCBIndex;
-		//uint32_t dynamicOffsets[2] = { 0,cbvIndex *objSize};
-
-		dynamicOffsets[0] = (uint32_t)(cbvIndex * objSize);
-		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsOBs[mIndex], 2, dynamicOffsets);
-		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 1, 1, &mDescriptorSetsOBs[mIndex], 1, dynamicOffsets);
-		dynamicOffsets[0] = (uint32_t)(ri->Mat->MatCBIndex * matSize);
-		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 2, 1, &mDescriptorSetsMats[mIndex], 1, dynamicOffsets);
-
-		pvkCmdDrawIndexed(cmd, ri->IndexCount, 1, 0, ri->BaseVertexLocation, 0);
-	}
-}
-
-void StencilApp::BuildRootSignature() {
-	//build pipeline layout
-	std::vector<VkDescriptorSetLayout> layouts = {
-		mDescriptorSetLayoutPC,
-		mDescriptorSetLayoutOBs,
-		mDescriptorSetLayoutMats,
-		mDescriptorSetLayoutTextures
-	};
-	mPipelineLayout = initPipelineLayout(mDevice, layouts);
-}
-void StencilApp::OnResize() {
-	VulkApp::OnResize();
-	mProj = glm::perspectiveFovLH_ZO(0.25f * pi, (float)mClientWidth, (float)mClientHeight, 1.0f, 1000.0f);
-}
 void StencilApp::LoadTextures()
 {
-	auto bricksTex = std::make_unique<Texture>();
-	bricksTex->Name = "bricksTex";
-	bricksTex->FileName = "../../../Textures/bricks3.jpg";
-	loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mFormatProperties, mMemoryProperties, bricksTex->FileName.c_str(), *bricksTex);
-	
+	//auto bricksTex = std::make_unique<Texture>();
+	//bricksTex->Name = "bricksTex";
+	//bricksTex->FileName = "../../../Textures/bricks3.jpg";
+	//loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mMemoryProperties, bricksTex->FileName.c_str(), *bricksTex);
 
-	auto checkboardTex = std::make_unique<Texture>();
-	checkboardTex->Name = "checkboardTex";
-	checkboardTex->FileName = "../../../Textures/checkboard.jpg";
-	loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mFormatProperties, mMemoryProperties, checkboardTex->FileName.c_str(), *checkboardTex);
 
-	auto iceTex = std::make_unique<Texture>();
-	iceTex->Name = "iceTex";
-	iceTex->FileName = "../../../Textures/ice.jpg";
-	loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mFormatProperties, mMemoryProperties, iceTex->FileName.c_str(), *iceTex);
-	
-	auto white1x1Tex = std::make_unique<Texture>();
-	white1x1Tex->Name = "white1x1Tex";
-	white1x1Tex->FileName = "../../../Textures/white1x1.jpg";
-	loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mFormatProperties, mMemoryProperties, white1x1Tex->FileName.c_str(), *white1x1Tex);
+	//auto checkboardTex = std::make_unique<Texture>();
+	//checkboardTex->Name = "checkboardTex";
+	//checkboardTex->FileName = "../../../Textures/checkboard.jpg";
+	//loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mMemoryProperties, checkboardTex->FileName.c_str(), *checkboardTex);
 
-	mTextures[bricksTex->Name] = std::move(bricksTex);
-	mTextures[checkboardTex->Name] = std::move(checkboardTex);
-	mTextures[iceTex->Name] = std::move(iceTex);
-	mTextures[white1x1Tex->Name] = std::move(white1x1Tex);
-}
+	//auto iceTex = std::make_unique<Texture>();
+	//iceTex->Name = "iceTex";
+	//iceTex->FileName = "../../../Textures/ice.jpg";
+	//loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mMemoryProperties, iceTex->FileName.c_str(), *iceTex);
 
-void StencilApp::OnMouseDown(WPARAM btnState, int x, int y) {
-	mLastMousePos.x = x;
-	mLastMousePos.y = y;
-	SetCapture(mhMainWnd);
-}
+	//auto white1x1Tex = std::make_unique<Texture>();
+	//white1x1Tex->Name = "white1x1Tex";
+	//white1x1Tex->FileName = "../../../Textures/white1x1.jpg";
+	//loadTexture(mDevice, mCommandBuffer, mGraphicsQueue, mMemoryProperties, white1x1Tex->FileName.c_str(), *white1x1Tex);
 
-void StencilApp::OnMouseUp(WPARAM btnState, int x, int y) {
-	ReleaseCapture();
-}
-
-void StencilApp::OnMouseMove(WPARAM btnState, int x, int y) {
-	if ((btnState & MK_LBUTTON) != 0) {
-		// Make each pixel correspond to a quarter of a degree.
-		float dx = glm::radians(0.25f * static_cast<float>(x - mLastMousePos.x));
-		float dy = glm::radians(0.25f * static_cast<float>(y - mLastMousePos.y));
-
-		// Update angles based on input to orbit camera around box.
-		mTheta += dx;
-		mPhi += dy;
-
-		// Restrict the angle mPhi.
-		mPhi = MathHelper::Clamp(mPhi, 0.1f, MathHelper::Pi - 0.1f);    // Convert Spherical to Cartesian coordinates.
-	}
-	else if ((btnState & MK_RBUTTON) != 0)
-	{
-		// Make each pixel correspond to 0.005 unit in the scene.
-		float dx = 0.05f * static_cast<float>(x - mLastMousePos.x);
-		float dy = 0.05f * static_cast<float>(y - mLastMousePos.y);
-
-		// Update the camera radius based on input.
-		mRadius += dx - dy;
-
-		// Restrict the radius.
-		mRadius = MathHelper::Clamp(mRadius, 5.0f, 150.0f);
-	}
-
-	mLastMousePos.x = x;
-	mLastMousePos.y = y;
-}
-void StencilApp::OnKeyboardInput(const GameTimer& gt)
-{
-	if (GetAsyncKeyState('1') & 0x8000)
-		mIsWireframe = true;
-	else
-		mIsWireframe = false;
-
-	if (GetAsyncKeyState('P') & 0x8000) {
-		
-		
-		saveScreenCap(mDevice, mCommandBuffer, mGraphicsQueue, mSwapchainImages[mIndex], mMemoryProperties, mFormatProperties, mSwapchainFormat.format,{(uint32_t)mClientWidth,(uint32_t)mClientHeight}, mFrameCount);
-	}
-	const float dt = gt.DeltaTime();
-
-	if (GetAsyncKeyState('A') & 0x8000)
-		mSkullTranslation.x -= 1.0f * dt;
-
-	if (GetAsyncKeyState('D') & 0x8000)
-		mSkullTranslation.x += 1.0f * dt;
-
-	if (GetAsyncKeyState('W') & 0x8000)
-		mSkullTranslation.y += 1.0f * dt;
-
-	if (GetAsyncKeyState('S') & 0x8000)
-		mSkullTranslation.y -= 1.0f * dt;
-
-	// Don't let user move below ground plane.
-	mSkullTranslation.y = MathHelper::Max(mSkullTranslation.y, 0.0f);
-
-	// Update the new world matrix.
-	//XMMATRIX skullRotate = XMMatrixRotationY(0.5f * MathHelper::Pi);
-	glm::mat4 skullRotate = glm::rotate(glm::mat4(1.0f), 0.5f * pi, glm::vec3(0.0f, 1.0f, 0.0f));
-	//XMMATRIX skullScale = XMMatrixScaling(0.45f, 0.45f, 0.45f);
-	glm::mat4 skullScale = glm::scale(glm::mat4(1.0f), glm::vec3(0.45f, 0.45f, 0.45f));
-	//XMMATRIX skullOffset = XMMatrixTranslation(mSkullTranslation.x, mSkullTranslation.y, mSkullTranslation.z);
-	glm::mat4 skullOffset = glm::translate(glm::mat4(1.0f), mSkullTranslation);
-	//XMMATRIX skullWorld = skullRotate * skullScale * skullOffset;
-	glm::mat4 skullWorld = skullOffset * skullScale * skullRotate;
-	//XMStoreFloat4x4(&mSkullRitem->World, skullWorld);
-	mSkullRitem->World = skullWorld;
-
-	// Update reflection world matrix.
-	//XMVECTOR mirrorPlane = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f); // xy plane
-	glm::vec4 mirrorPlane = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
-	//XMMATRIX R = XMMatrixReflect(mirrorPlane);
-	glm::mat4 R = MathHelper::reflect(mirrorPlane);
-	//XMStoreFloat4x4(&mReflectedSkullRitem->World, skullWorld * R);
-	mReflectedSkullRitem->World = R * skullWorld;
-
-	// Update shadow world matrix.
-	//XMVECTOR shadowPlane = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f); // xz plane
-	glm::vec4 shadowPlane = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
-	//XMVECTOR toMainLight = -XMLoadFloat3(&mMainPassCB.Lights[0].Direction);
-	glm::vec3 toMainLight = -mMainPassCB.Lights[0].Direction;
-	//XMMATRIX S = XMMatrixShadow(shadowPlane, toMainLight);
-	glm::mat4 S = MathHelper::shadowMatrix(glm::vec4(toMainLight,0.0f), shadowPlane);
-
-	//XMMATRIX shadowOffsetY = XMMatrixTranslation(0.0f, 0.001f, 0.0f);
-	glm::mat4 shadowOffsetY = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.001f, 0.0f));
-	//XMStoreFloat4x4(&mShadowedSkullRitem->World, skullWorld * S * shadowOffsetY);
-	mShadowedSkullRitem->World = shadowOffsetY * S * skullWorld;//Order?
-	mSkullRitem->NumFramesDirty = gNumFrameResources;
-	mReflectedSkullRitem->NumFramesDirty = gNumFrameResources;
-	mShadowedSkullRitem->NumFramesDirty = gNumFrameResources;
-}
-
-void StencilApp::AnimateMaterials(const GameTimer&gt) {
-
+	//mTextures[bricksTex->Name] = std::move(bricksTex);
+	//mTextures[checkboardTex->Name] = std::move(checkboardTex);
+	//mTextures[iceTex->Name] = std::move(iceTex);
+	//mTextures[white1x1Tex->Name] = std::move(white1x1Tex);
 }
 
 void StencilApp::Update(const GameTimer& gt) {
+	VulkApp::Update(gt);
 	OnKeyboardInput(gt);
 	UpdateCamera(gt);
 
@@ -943,11 +997,7 @@ void StencilApp::Update(const GameTimer& gt) {
 	mCurrFrameResourceIndex = (mCurrFrameResourceIndex + 1) % gNumFrameResources;
 	mCurrFrameResource = mFrameResources[mCurrFrameResourceIndex].get();
 
-	// Has the GPU finished processing the commands of the current frame resource?
-	// If not, wait until the GPU has completed commands up to this fence point.
-	vkWaitForFences(mDevice, 1, &mCurrFrameResource->Fence, VK_TRUE, UINT64_MAX);
-	vkResetFences(mDevice, 1, &mCurrFrameResource->Fence);
-
+	
 	AnimateMaterials(gt);
 	UpdateObjectCBs(gt);
 	UpdateMaterialsCBs(gt);
@@ -971,10 +1021,13 @@ void StencilApp::UpdateCamera(const GameTimer& gt) {
 }
 
 void StencilApp::UpdateObjectCBs(const GameTimer& gt) {
-	auto currObjectCB = mCurrFrameResource->ObjectCB;
+	//auto currObjectCB = mCurrFrameResource->ObjectCB;
 	uint8_t* pObjConsts = (uint8_t*)mCurrFrameResource->pOCs;
-	VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
-	VkDeviceSize objSize = ((uint32_t)sizeof(ObjectConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
+	//VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
+	//VkDeviceSize objSize = ((uint32_t)sizeof(ObjectConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
+	//VkDeviceSize objSize = pipelineRes->GetShaderResource(1).buffer.objectSize;
+	auto& ub = *uniformBuffer;
+	VkDeviceSize objSize = ub[1].objectSize;
 	for (auto& e : mAllRitems) {
 		//Only update the cbuffer data if the constants have changed.
 		//This needs to be tracked per frame resource.
@@ -1024,9 +1077,12 @@ void StencilApp::UpdateMainPassCB(const GameTimer& gt) {
 }
 
 void StencilApp::UpdateMaterialsCBs(const GameTimer& gt) {
-	VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
-	VkDeviceSize objSize = ((uint32_t)sizeof(MaterialConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
+	//VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
+	//VkDeviceSize objSize = ((uint32_t)sizeof(MaterialConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
 	uint8_t* pMatConsts = (uint8_t*)mCurrFrameResource->pMats;
+	//VkDeviceSize objSize = pipelineRes->GetShaderResource(2).buffer.objectSize;
+	auto& ub = *uniformBuffer;
+	VkDeviceSize objSize = ub[2].objectSize;
 	for (auto& e : mMaterials) {
 		Material* mat = e.second.get();
 		if (mat->NumFramesDirty > 0) {
@@ -1058,17 +1114,252 @@ void StencilApp::UpdateReflectedPassCB(const GameTimer& gt)
 	{
 		glm::vec3 lightDir = mMainPassCB.Lights[i].Direction;
 		glm::vec3 reflectedLightDir = R * glm::vec4(lightDir, 0.0f);// XMVector3TransformNormal(lightDir, R);
-		mReflectedPassCB.Lights[i].Direction= reflectedLightDir;
+		mReflectedPassCB.Lights[i].Direction = reflectedLightDir;
 	}
 	PassConstants* pRPC = mCurrFrameResource->pPCs;
-	VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
-	VkDeviceSize objSize = ((uint32_t)sizeof(PassConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
-	memcpy(((uint8_t*)pRPC)+objSize, &mReflectedPassCB, sizeof(PassConstants));
+	//VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
+	//VkDeviceSize objSize = ((uint32_t)sizeof(PassConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
+	//VkDeviceSize objSize = pipelineRes->GetShaderResource(0).buffer.objectSize;
+	auto& ub = *uniformBuffer;
+	VkDeviceSize objSize = ub[0].objectSize;
+	memcpy(((uint8_t*)pRPC) + objSize, &mReflectedPassCB, sizeof(PassConstants));
 	// Reflected pass stored in index 1
 	//auto currPassCB = mCurrFrameResource->PassCB.get();
 	//currPassCB->CopyData(1, mReflectedPassCB);
 }
 
+void StencilApp::OnResize() {
+	VulkApp::OnResize();
+	mProj = glm::perspectiveFovLH_ZO(0.25f * pi, (float)mClientWidth, (float)mClientHeight, 1.0f, 1000.0f);
+}
+
+void StencilApp::OnKeyboardInput(const GameTimer& gt)
+{
+	if (GetAsyncKeyState('1') & 0x8000)
+		mIsWireframe = true;
+	else
+		mIsWireframe = false;
+
+	if (GetAsyncKeyState('P') & 0x8000) {
+
+
+		saveScreenCap(mDevice, mCommandBuffer, mGraphicsQueue, mSwapchainImages[mIndex], mFormatProperties, mSwapchainFormat.format, {(uint32_t)mClientWidth,(uint32_t)mClientHeight}, mFrameCount);
+	}
+	const float dt = gt.DeltaTime();
+
+	if (GetAsyncKeyState('A') & 0x8000)
+		mSkullTranslation.x -= 1.0f * dt;
+
+	if (GetAsyncKeyState('D') & 0x8000)
+		mSkullTranslation.x += 1.0f * dt;
+
+	if (GetAsyncKeyState('W') & 0x8000)
+		mSkullTranslation.y += 1.0f * dt;
+
+	if (GetAsyncKeyState('S') & 0x8000)
+		mSkullTranslation.y -= 1.0f * dt;
+
+	// Don't let user move below ground plane.
+	mSkullTranslation.y = MathHelper::Max(mSkullTranslation.y, 0.0f);
+
+	// Update the new world matrix.
+	//XMMATRIX skullRotate = XMMatrixRotationY(0.5f * MathHelper::Pi);
+	glm::mat4 skullRotate = glm::rotate(glm::mat4(1.0f), 0.5f * pi, glm::vec3(0.0f, 1.0f, 0.0f));
+	//XMMATRIX skullScale = XMMatrixScaling(0.45f, 0.45f, 0.45f);
+	glm::mat4 skullScale = glm::scale(glm::mat4(1.0f), glm::vec3(0.45f, 0.45f, 0.45f));
+	//XMMATRIX skullOffset = XMMatrixTranslation(mSkullTranslation.x, mSkullTranslation.y, mSkullTranslation.z);
+	glm::mat4 skullOffset = glm::translate(glm::mat4(1.0f), mSkullTranslation);
+	//XMMATRIX skullWorld = skullRotate * skullScale * skullOffset;
+	glm::mat4 skullWorld = skullOffset * skullScale * skullRotate;
+	//XMStoreFloat4x4(&mSkullRitem->World, skullWorld);
+	mSkullRitem->World = skullWorld;
+
+	// Update reflection world matrix.
+	//XMVECTOR mirrorPlane = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f); // xy plane
+	glm::vec4 mirrorPlane = glm::vec4(0.0f, 0.0f, 1.0f, 0.0f);
+	//XMMATRIX R = XMMatrixReflect(mirrorPlane);
+	glm::mat4 R = MathHelper::reflect(mirrorPlane);
+	//XMStoreFloat4x4(&mReflectedSkullRitem->World, skullWorld * R);
+	mReflectedSkullRitem->World = R * skullWorld;
+
+	// Update shadow world matrix.
+	//XMVECTOR shadowPlane = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f); // xz plane
+	glm::vec4 shadowPlane = glm::vec4(0.0f, 1.0f, 0.0f, 0.0f);
+	//XMVECTOR toMainLight = -XMLoadFloat3(&mMainPassCB.Lights[0].Direction);
+	glm::vec3 toMainLight = -mMainPassCB.Lights[0].Direction;
+	//XMMATRIX S = XMMatrixShadow(shadowPlane, toMainLight);
+	glm::mat4 S = MathHelper::shadowMatrix(glm::vec4(toMainLight, 0.0f), shadowPlane);
+
+	//XMMATRIX shadowOffsetY = XMMatrixTranslation(0.0f, 0.001f, 0.0f);
+	glm::mat4 shadowOffsetY = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.001f, 0.0f));
+	//XMStoreFloat4x4(&mShadowedSkullRitem->World, skullWorld * S * shadowOffsetY);
+	mShadowedSkullRitem->World = shadowOffsetY * S * skullWorld;//Order?
+	mSkullRitem->NumFramesDirty = gNumFrameResources;
+	mReflectedSkullRitem->NumFramesDirty = gNumFrameResources;
+	mShadowedSkullRitem->NumFramesDirty = gNumFrameResources;
+}
+
+void StencilApp::AnimateMaterials(const GameTimer& gt) {
+
+}
+
+void StencilApp::OnMouseDown(WPARAM btnState, int x, int y) {
+	mLastMousePos.x = x;
+	mLastMousePos.y = y;
+	SetCapture(mhMainWnd);
+}
+
+void StencilApp::OnMouseUp(WPARAM btnState, int x, int y) {
+	ReleaseCapture();
+}
+
+void StencilApp::OnMouseMove(WPARAM btnState, int x, int y) {
+	if ((btnState & MK_LBUTTON) != 0) {
+		// Make each pixel correspond to a quarter of a degree.
+		float dx = glm::radians(0.25f * static_cast<float>(x - mLastMousePos.x));
+		float dy = glm::radians(0.25f * static_cast<float>(y - mLastMousePos.y));
+
+		// Update angles based on input to orbit camera around box.
+		mTheta += dx;
+		mPhi += dy;
+
+		// Restrict the angle mPhi.
+		mPhi = MathHelper::Clamp(mPhi, 0.1f, MathHelper::Pi - 0.1f);    // Convert Spherical to Cartesian coordinates.
+	}
+	else if ((btnState & MK_RBUTTON) != 0)
+	{
+		// Make each pixel correspond to 0.005 unit in the scene.
+		float dx = 0.05f * static_cast<float>(x - mLastMousePos.x);
+		float dy = 0.05f * static_cast<float>(y - mLastMousePos.y);
+
+		// Update the camera radius based on input.
+		mRadius += dx - dy;
+
+		// Restrict the radius.
+		mRadius = MathHelper::Clamp(mRadius, 5.0f, 150.0f);
+	}
+
+	mLastMousePos.x = x;
+	mLastMousePos.y = y;
+}
+
+void StencilApp::Draw(const GameTimer& gt) {
+	uint32_t index = 0;
+	VkCommandBuffer cmd{ VK_NULL_HANDLE };
+
+	cmd = BeginRender();
+
+	VkViewport viewport = { 0.0f,0.0f,(float)mClientWidth,(float)mClientHeight,0.0f,1.0f };
+	pvkCmdSetViewport(cmd, 0, 1, &viewport);
+	VkRect2D scissor = { {0,0},{(uint32_t)mClientWidth,(uint32_t)mClientHeight} };
+	pvkCmdSetScissor(cmd, 0, 1, &scissor);
+
+	//VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
+	//VkDeviceSize passSize = ((uint32_t)sizeof(PassConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
+	//uint32_t dynamicOffsets[1] = { 0 };
+	//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets);//bind PC data once
+	//uint32_t dynamicOffsets2[1] = { (uint32_t)passSize };
+	auto& ub = *uniformBuffer;
+	VkDeviceSize passSize = ub[0].objectSize;
+	uint32_t dynamicOffsets[1] = { (uint32_t)( mCurrFrame*2 * passSize)};
+	//VkDescriptorSet descriptor = pipelineRes->GetDescriptorSet(0, mCurrFrame);
+	auto& ud = *uniformDescriptors;
+	VkDescriptorSet descriptor = ud[0];
+	pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 0, 1, &descriptor, 1, dynamicOffsets);//bind PC data once
+	//VkDeviceSize passSize = pipelineRes->GetShaderResource(0).buffer.objectSize;
+	
+	
+	uint32_t dynamicOffsets2[1] = { (uint32_t)(mCurrFrame * 2 * passSize + passSize )};
+
+	if (mIsWireframe) {
+		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["opaque_wireframe"]);
+		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Opaque]);
+		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Mirrors]);
+		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets2);//bind PC data once
+		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 0, 1, &descriptor, 1, dynamicOffsets2);//bind PC data once
+		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Reflected]);
+		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets);//bind PC data once
+		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 0, 1, &descriptor, 1, dynamicOffsets);//bind PC data once
+		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Transparent]);
+		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Shadow]);
+	}
+	else {
+
+		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["opaque"]);
+		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Opaque]);
+		
+		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["markStencilMirrors"]);
+		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Mirrors]);
+
+		
+		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 0, 1, &descriptor, 1, dynamicOffsets2);//bind PC data once
+		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["drawStencilReflections"]);
+		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Reflected]);
+		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 0, 1, &descriptor, 1, dynamicOffsets);//bind PC data once
+		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["transparent"]);
+		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Transparent]);
+		pvkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPSOs["shadow"]);
+		DrawRenderItems(cmd, mRitemLayer[(int)RenderLayer::Shadow]);
+	}
+
+
+
+
+
+
+	EndRender(cmd);
+
+
+}
+
+void StencilApp::DrawRenderItems(VkCommandBuffer cmd, const std::vector<RenderItem*>& ritems) {
+	//	VkDeviceSize obSize = mCurrFrameResource->ObjectCBSize;
+	//VkDeviceSize minAlignmentSize = mDeviceProperties.limits.minUniformBufferOffsetAlignment;
+	//VkDeviceSize objSize = ((uint32_t)sizeof(ObjectConstants) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
+	//VkDeviceSize matSize = ((uint32_t)sizeof(Material) + minAlignmentSize - 1) & ~(minAlignmentSize - 1);
+	uint32_t dynamicOffsets[1] = { 0 };
+	//uint32_t count = getSwapchainImageCount(mSurfaceCaps);
+	//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsPC[mIndex], 1, dynamicOffsets);//bind PC data once
+	//VkDeviceSize objectSize = pipelineRes->GetShaderResource(1).buffer.objectSize;
+	auto& ub = *uniformBuffer;
+	VkDeviceSize objectSize = ub[1].objectSize;
+	//VkDeviceSize matSize = pipelineRes->GetShaderResource(2).buffer.objectSize;
+	VkDeviceSize matSize = ub[2].objectSize;
+	//VkDescriptorSet descriptor2 = pipelineRes->GetDescriptorSet(1, mCurrFrame);
+	//VkDescriptorSet descriptor3 = pipelineRes->GetDescriptorSet(2, mCurrFrame);
+	//VkDescriptorSet descriptor4 = pipelineRes->GetDescriptorSet(3, mCurrFrame);
+	auto& ud = *uniformDescriptors;
+	auto& td = *textureDescriptors;
+	VkDescriptorSet descriptor1 = ud[1];
+	VkDescriptorSet descriptor2 = ud[2];
+	VkDescriptorSet descriptors[2] = { descriptor1,descriptor2 };
+	for (size_t i = 0; i < ritems.size(); i++) {
+		auto ri = ritems[i];
+		uint32_t indexOffset = ri->StartIndexLocation;
+		
+		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 3, 1, &mDescriptorSetsTextures[ri->Mat->DiffuseSrvHeapIndex], 0, 0);//bin texture descriptor
+		const auto vbv = ri->Geo->vertexBufferGPU;
+		pvkCmdBindVertexBuffers(cmd, 0, 1, &vbv.buffer, mOffsets);
+		const auto ibv = ri->Geo->indexBufferGPU;
+		pvkCmdBindIndexBuffer(cmd, ibv.buffer, indexOffset * sizeof(uint32_t), VK_INDEX_TYPE_UINT32);
+		uint32_t cbvIndex = ri->ObjCBIndex;
+		//uint32_t dynamicOffsets[2] = { 0,cbvIndex *objSize};
+
+		//dynamicOffsets[0] = (uint32_t)(cbvIndex * objSize);
+		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 0, 1, &mDescriptorSetsOBs[mIndex], 2, dynamicOffsets);
+		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 1, 1, &mDescriptorSetsOBs[mIndex], 1, dynamicOffsets);
+		//dynamicOffsets[0] = (uint32_t)(ri->Mat->MatCBIndex * matSize);
+		//pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, mPipelineLayout, 2, 1, &mDescriptorSetsMats[mIndex], 1, dynamicOffsets);
+		uint32_t dyoffsets[2] = { (uint32_t)(cbvIndex * objectSize),(uint32_t)(ri->Mat->MatCBIndex * matSize) };
+		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 1, 2, descriptors, 2, dyoffsets);
+		//bind texture
+
+		//VkDescriptorSet descriptor4 = pipelineRes->GetDescriptorSet(3, ri->Mat->MatCBIndex);
+		VkDescriptorSet descriptor3 = td[ri->Mat->DiffuseSrvHeapIndex];
+		pvkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, *pipelineLayout, 3, 1, &descriptor3, 0, nullptr);//bind PC data once
+		pvkCmdDrawIndexed(cmd, ri->IndexCount, 1, 0, ri->BaseVertexLocation, 0);
+	}
+}
 
 int main() {
 #if defined(DEBUG) | defined(_DEBUG)
